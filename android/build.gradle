@@ -1,0 +1,57 @@
+buildscript {
+  ext.PhotoVideoEditor = [
+    kotlinVersion: "2.0.21",
+    minSdkVersion: 24,
+    compileSdkVersion: 36
+  ]
+
+  ext.getExtOrDefault = { prop ->
+    if (rootProject.ext.has(prop)) {
+      return rootProject.ext.get(prop)
+    }
+
+    return PhotoVideoEditor[prop]
+  }
+
+  repositories {
+    google()
+    mavenCentral()
+  }
+
+  dependencies {
+    classpath "com.android.tools.build:gradle:8.7.2"
+    // noinspection DifferentKotlinGradleVersion
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${getExtOrDefault('kotlinVersion')}"
+  }
+}
+
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+apply plugin: "com.facebook.react"
+
+android {
+  namespace "com.photovideoeditor"
+
+  compileSdkVersion getExtOrDefault("compileSdkVersion")
+
+  defaultConfig {
+    minSdkVersion getExtOrDefault("minSdkVersion")
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+}
+
+dependencies {
+  implementation "com.facebook.react:react-android"
+  implementation "androidx.exifinterface:exifinterface:1.3.7"
+  implementation "androidx.media3:media3-exoplayer:1.4.1"
+  implementation "androidx.media3:media3-ui:1.4.1"
+  implementation "androidx.media3:media3-transformer:1.4.1"
+  implementation "androidx.media3:media3-effect:1.4.1"
+  implementation "androidx.media3:media3-common:1.4.1"
+}

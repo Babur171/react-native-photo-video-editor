@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <activity
+      android:name=".editor.PhotoVideoEditorActivity"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode"
+      android:exported="false"
+      android:screenOrientation="portrait"
+      android:theme="@style/PhotoVideoEditorTheme" />
+  </application>
+</manifest>

@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=hankenGrotesk:wght@100..900&family=plusJakartaSans:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{width:100vw;margin:0;padding:0;}body{overscroll-behavior:none;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "surface-container-highest": "#353438", "inverse-primary": "#732ee4", "on-tertiary": "#3c0091", "tertiary-container": "#7645e0", "secondary-fixed-dim": "#c0c1ff", "primary-container": "#7c3aed", "secondary-container": "#3131c0", "on-secondary": "#1000a9", "tertiary-fixed-dim": "#d0bcff", "on-surface-variant": "#ccc3d8", "on-error-container": "#ffdad6", "primary-fixed-dim": "#d2bbff", "inverse-surface": "#e4e1e6", "on-primary-container": "#ede0ff", "on-tertiary-container": "#ece1ff", "surface-variant": "#353438", "surface-dim": "#131316", "tertiary": "#d0bcff", "primary": "#d2bbff", "secondary-fixed": "#e1e0ff", "secondary": "#c0c1ff", "on-primary-fixed-variant": "#5a00c6", "error-container": "#93000a", "background": "#131316", "on-error": "#690005", "on-surface": "#e4e1e6", "error": "#ffb4ab", "surface": "#131316", "on-primary-fixed": "#25005a", "surface-bright": "#39393c", "on-secondary-fixed-variant": "#2f2ebe", "tertiary-fixed": "#e9ddff", "on-tertiary-fixed-variant": "#5516be", "outline-variant": "#4a4455", "on-secondary-container": "#b0b2ff", "primary-fixed": "#eaddff", "on-tertiary-fixed": "#23005c", "on-primary": "#3f008e", "surface-tint": "#d2bbff", "on-background": "#e4e1e6", "surface-container": "#1f1f22", "inverse-on-surface": "#303033", "surface-container-lowest": "#0e0e11", "surface-container-high": "#2a2a2d", "on-secondary-fixed": "#07006c", "outline": "#958da1", "surface-container-low": "#1b1b1e" }, "borderRadius": { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" }, "spacing": { "touch-target-min": "2.75rem", "bottom-sheet-inset": "1rem", "gutter-mobile": "1rem", "space-sm": "0.5rem", "space-3xl": "2rem", "space-md": "0.75rem", "space-lg": "1rem", "space-2xs": "0.125rem", "space-xl": "1.25rem", "space-xs": "0.25rem", "space-2xl": "1.5rem" }, "fontFamily": { "body-lg": ["hankenGrotesk"], "label-sm": ["hankenGrotesk"], "headline-md": ["plusJakartaSans"], "headline-lg": ["plusJakartaSans"], "body-md": ["hankenGrotesk"], "numeric-pill": ["hankenGrotesk"], "headline-sm": ["plusJakartaSans"], "caption": ["hankenGrotesk"], "label-md": ["hankenGrotesk"] }, "fontSize": { "body-lg": ["15px", { "lineHeight": "22px", "letterSpacing": "0em", "fontWeight": "400" }], "label-sm": ["11px", { "lineHeight": "14px", "letterSpacing": "0.03em", "fontWeight": "500" }], "headline-md": ["20px", { "lineHeight": "28px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "headline-lg": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.02em", "fontWeight": "700" }], "body-md": ["13px", { "lineHeight": "18px", "letterSpacing": "0em", "fontWeight": "400" }], "numeric-pill": ["12px", { "lineHeight": "14px", "letterSpacing": "-0.01em", "fontWeight": "700" }], "headline-sm": ["16px", { "lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "600" }], "caption": ["10px", { "lineHeight": "12px", "letterSpacing": "0.04em", "fontWeight": "500" }], "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "600" }] } } } }</script></head><body class="bg-surface text-on-surface font-body-md text-body-md flex flex-col min-h-screen"><header class="fixed top-0 w-full z-50 pt-safe bg-surface-container-lowest/90 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.5)]"><div class="h-14 px-gutter-mobile flex items-center justify-between"><div class="flex items-center gap-space-sm"><button aria-label="Cancel Edit" class="w-touch-target-min h-touch-target-min flex items-center justify-center text-on-surface-variant hover:text-on-surface transition-colors"><span class="material-symbols-outlined text-[20px]">close</span></button></div><div class="flex flex-col items-center justify-center"><h1 class="font-headline-sm text-headline-sm text-on-surface tracking-tight leading-none">Crop Mode</h1><span class="font-caption text-caption text-primary tracking-wide uppercase mt-space-2xs">Studio Workspace</span></div><div class="flex items-center gap-space-xs"><button aria-label="Export photo" class="h-9 px-space-md rounded-xl bg-primary-container text-on-primary-container font-label-md text-label-md flex items-center gap-space-xs shadow-[0_4px_12px_rgba(124,58,237,0.35)] active:scale-95 transition-transform"><span class="material-symbols-outlined text-[16px]">check</span><span>Done</span></button><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center ml-space-xs"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></div></div></header><main class="flex-1 flex flex-col relative w-full pt-14 pb-20 bg-surface"><div class="flex flex-col w-full px-gutter-mobile gap-space-md select-none">
+<!-- Top Floating Ratio & Resolution Pill -->
+<div class="flex items-center justify-between w-full pt-space-xs">
+<div class="flex items-center gap-space-xs bg-surface-container-high px-space-md py-1 rounded-full shadow-md">
+<span class="w-2 h-2 rounded-full bg-primary-container animate-pulse"></span>
+<span class="font-numeric-pill text-numeric-pill text-on-surface" id="ratio-label">4:5 · Portrait (1080 × 1350)</span>
+</div>
+<button class="h-8 px-space-md rounded-full bg-surface-container-high hover:bg-surface-container-highest active:scale-95 transition-all flex items-center gap-space-xs text-secondary-fixed shadow-sm" id="auto-straighten-btn">
+<span class="material-symbols-outlined text-[16px] text-primary">auto_fix_high</span>
+<span class="font-label-sm text-label-sm font-semibold tracking-wide">Auto-Level</span>
+</button>
+</div>
+<!-- Interactive Crop Canvas Viewport -->
+<div class="relative w-full aspect-[4/5] max-h-[46vh] rounded-2xl overflow-hidden bg-surface-container-lowest flex items-center justify-center shadow-2xl">
+<!-- Image Canvas Container with Transform bindings -->
+<div class="relative w-full h-full flex items-center justify-center transition-transform duration-200 ease-out origin-center" id="canvas-image-wrap" style="transform: rotate(-2.5deg) scale(1.08);">
+<img alt="Editorial Portrait Canvas" class="w-full h-full object-cover pointer-events-none select-none" src="https://lh3.googleusercontent.com/aida/AEtjO1U3nwPJsrzN77uaveZp7DPNJIOG4WAducYZ9eBzicdGQXI8Dzpy1XoWhMbAPG9uP7lntzbB5mhOvxyTSaWFMnwTZcfcQ6DaBOX_w152gon7Olzo5eJPaRmEXG-XnDltfVZtlLnFSVwmdtHieg1DEPaO0yvC4p5UusoIuYAhF1GHIPCrMBefZt8L5QFo3O4gytG4DJC12nDcwCXg-Kxw0kMu7G1nJsfRKQOuF_xF_fNNdXAkkNyGgMqF6W8"/>
+</div>
+<!-- Letterbox Dimming Overlay Outside Crop Box (Simulated Framed Bounds) -->
+<div class="absolute inset-0 pointer-events-none shadow-[inset_0_0_0_12px_rgba(14,14,17,0.7)]"></div>
+<!-- Active Crop Mask Frame & Rule-of-Thirds Grid -->
+<div class="absolute inset-3 pointer-events-none flex flex-col justify-between shadow-[0_0_0_9999px_rgba(14,14,17,0.58)]" id="crop-active-box">
+<!-- Top 1/3 horizontal guide line -->
+<div class="absolute top-1/3 left-0 right-0 h-[1px] bg-on-surface/25"></div>
+<!-- Bottom 2/3 horizontal guide line -->
+<div class="absolute top-2/3 left-0 right-0 h-[1px] bg-on-surface/25"></div>
+<!-- Left 1/3 vertical guide line -->
+<div class="absolute left-1/3 top-0 bottom-0 w-[1px] bg-on-surface/25"></div>
+<!-- Right 2/3 vertical guide line -->
+<div class="absolute left-2/3 top-0 bottom-0 w-[1px] bg-on-surface/25"></div>
+<!-- Center Crosshair / Grid Focus Marker -->
+<div class="absolute inset-0 m-auto w-3 h-3 flex items-center justify-center pointer-events-none opacity-40">
+<div class="w-full h-[1px] bg-primary"></div>
+<div class="absolute h-full w-[1px] bg-primary"></div>
+</div>
+<!-- L-shaped Corner Drag Handles -->
+<!-- Top-Left -->
+<div class="absolute -top-1 -left-1 w-6 h-6 pointer-events-auto cursor-nwse-resize">
+<div class="w-full h-1 bg-white rounded-full"></div>
+<div class="w-1 h-full bg-white rounded-full"></div>
+</div>
+<!-- Top-Right -->
+<div class="absolute -top-1 -right-1 w-6 h-6 pointer-events-auto cursor-nesw-resize flex flex-col items-end">
+<div class="w-full h-1 bg-white rounded-full"></div>
+<div class="w-1 h-full bg-white rounded-full"></div>
+</div>
+<!-- Bottom-Left -->
+<div class="absolute -bottom-1 -left-1 w-6 h-6 pointer-events-auto cursor-nesw-resize flex flex-col justify-end">
+<div class="w-1 h-full bg-white rounded-full"></div>
+<div class="w-full h-1 bg-white rounded-full"></div>
+</div>
+<!-- Bottom-Right -->
+<div class="absolute -bottom-1 -right-1 w-6 h-6 pointer-events-auto cursor-nwse-resize flex flex-col justify-end items-end">
+<div class="w-1 h-full bg-white rounded-full"></div>
+<div class="w-full h-1 bg-white rounded-full"></div>
+</div>
+<!-- Midpoint Grab Indicators -->
+<div class="absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 bg-white/80 rounded-full"></div>
+<div class="absolute -bottom-1 left-1/2 -translate-x-1/2 w-8 h-1 bg-white/80 rounded-full"></div>
+<div class="absolute -left-1 top-1/2 -translate-y-1/2 h-8 w-1 bg-white/80 rounded-full"></div>
+<div class="absolute -right-1 top-1/2 -translate-y-1/2 h-8 w-1 bg-white/80 rounded-full"></div>
+</div>
+<!-- Live Angle Floating Indicator -->
+<div class="absolute bottom-3 left-1/2 -translate-x-1/2 px-space-md py-space-2xs rounded-full bg-surface-container-lowest/90 backdrop-blur-md shadow-lg flex items-center gap-space-xs text-primary font-numeric-pill text-numeric-pill" id="angle-floating-badge">
+<span class="material-symbols-outlined text-[14px]">rotate_90_degrees_ccw</span>
+<span id="canvas-angle-text">-2.5°</span>
+</div>
+</div>
+<!-- Precision Straighten Angle Dial / Vernier Scale -->
+<div class="w-full flex flex-col items-center gap-space-xs bg-surface-container-low p-space-sm rounded-xl">
+<div class="flex items-center justify-between w-full px-space-xs">
+<button class="w-touch-target-min h-touch-target-min flex items-center justify-center text-on-surface-variant hover:text-on-surface transition-colors" id="btn-reset-angle" title="Reset angle to 0°">
+<span class="material-symbols-outlined text-[18px]">replay</span>
+</button>
+<!-- Center Angle Metric Readout -->
+<div class="flex items-center gap-space-xs bg-surface-container-high px-space-md py-1 rounded-full">
+<span class="font-caption text-caption uppercase text-on-surface-variant tracking-wider">Straighten</span>
+<span class="font-numeric-pill text-numeric-pill text-primary font-bold min-w-[3rem] text-center" id="slider-degree-display">-2.5°</span>
+</div>
+<button class="w-touch-target-min h-touch-target-min flex items-center justify-center text-on-surface-variant hover:text-primary transition-colors font-label-sm text-label-sm" id="btn-zero-snap" title="Snap to 0°">
+        0°
+      </button>
+</div>
+<!-- Visual Interactive Tick Scale -->
+<div class="relative w-full h-9 flex items-center overflow-hidden cursor-ew-resize px-space-lg">
+<!-- Fixed Center Needle Reference -->
+<div class="absolute left-1/2 top-0 bottom-0 -translate-x-1/2 w-0.5 bg-primary-container z-20 shadow-[0_0_8px_rgba(124,58,237,0.8)] flex flex-col justify-between items-center">
+<div class="w-1.5 h-1.5 rounded-full bg-primary -mt-0.5"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary -mb-0.5"></div>
+</div>
+<!-- Tick Marks Container (Draggable / Vernier) -->
+<div class="w-full flex items-center justify-between gap-1.5 px-2 opacity-80 transition-transform duration-75" id="ruler-strip">
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-3 bg-on-surface-variant/60 rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-4 bg-on-surface-variant/70 rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-3 bg-on-surface-variant/60 rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-5 bg-on-surface-variant rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-3 bg-on-surface-variant/60 rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<!-- Zero Index Mark -->
+<div class="w-1 h-6 bg-primary rounded-full shadow-[0_0_6px_rgba(208,188,255,0.6)]"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-3 bg-on-surface-variant/60 rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-5 bg-on-surface-variant rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-3 bg-on-surface-variant/60 rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-4 bg-on-surface-variant/70 rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+<div class="w-0.5 h-3 bg-on-surface-variant/60 rounded-full"></div>
+<div class="w-0.5 h-2 bg-on-surface-variant/40 rounded-full"></div>
+</div>
+<!-- Hidden standard range slider for accessible gesture manipulation -->
+<input aria-label="Straighten Angle Adjustment" class="absolute inset-0 w-full opacity-0 cursor-ew-resize z-30" id="angle-slider" max="45" min="-45" step="0.5" type="range" value="-2.5"/>
+</div>
+</div>
+<!-- Quick Transform Action Row -->
+<div class="w-full flex items-center justify-around bg-surface-container-high py-space-xs px-space-sm rounded-xl shadow-inner">
+<button class="w-touch-target-min h-touch-target-min flex flex-col items-center justify-center gap-space-2xs text-on-surface hover:text-primary active:scale-90 transition-transform" id="btn-rot-left" title="Rotate Left 90°">
+<span class="material-symbols-outlined text-[22px]">rotate_left</span>
+<span class="font-caption text-caption text-on-surface-variant">-90°</span>
+</button>
+<button class="w-touch-target-min h-touch-target-min flex flex-col items-center justify-center gap-space-2xs text-on-surface hover:text-primary active:scale-90 transition-transform" id="btn-rot-right" title="Rotate Right 90°">
+<span class="material-symbols-outlined text-[22px]">rotate_right</span>
+<span class="font-caption text-caption text-on-surface-variant">+90°</span>
+</button>
+<button class="w-touch-target-min h-touch-target-min flex flex-col items-center justify-center gap-space-2xs text-on-surface hover:text-primary active:scale-90 transition-transform" id="btn-flip-h" title="Flip Horizontal">
+<span class="material-symbols-outlined text-[22px]">flip</span>
+<span class="font-caption text-caption text-on-surface-variant">Flip X</span>
+</button>
+<button class="w-touch-target-min h-touch-target-min flex flex-col items-center justify-center gap-space-2xs text-on-surface hover:text-primary active:scale-90 transition-transform" id="btn-flip-v" title="Flip Vertical">
+<span class="material-symbols-outlined text-[22px] rotate-90">flip</span>
+<span class="font-caption text-caption text-on-surface-variant">Flip Y</span>
+</button>
+<div class="h-6 w-[1px] bg-surface-container-highest"></div>
+<button class="w-touch-target-min h-touch-target-min flex flex-col items-center justify-center gap-space-2xs text-on-surface-variant hover:text-error active:scale-90 transition-transform" id="btn-reset-all" title="Reset All Transforms">
+<span class="material-symbols-outlined text-[20px]">restart_alt</span>
+<span class="font-caption text-caption">Reset</span>
+</button>
+</div>
+<!-- Aspect Ratio Preset Scrollable Track -->
+<div class="flex flex-col w-full gap-space-xs">
+<div class="flex items-center justify-between px-space-xs">
+<span class="font-label-md text-label-md text-on-surface font-semibold">Aspect Ratios</span>
+<span class="font-caption text-caption text-primary" id="active-preset-desc">Instagram / Gallery Standard</span>
+</div>
+<div class="flex items-center gap-space-sm overflow-x-auto py-1 scroll-smooth no-scrollbar">
+<!-- 1. Free Custom -->
+<button class="ratio-chip min-w-[68px] h-20 bg-surface-container-high rounded-xl p-space-xs flex flex-col items-center justify-between transition-all active:scale-95 text-on-surface-variant" data-desc="Freeform crop bounds" data-label="Custom Ratio" data-ratio="free">
+<div class="w-full flex-1 flex items-center justify-center">
+<div class="w-8 h-8 rounded-lg bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">crop_free</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm font-medium">Free</span>
+</button>
+<!-- 2. Original -->
+<button class="ratio-chip min-w-[68px] h-20 bg-surface-container-high rounded-xl p-space-xs flex flex-col items-center justify-between transition-all active:scale-95 text-on-surface-variant" data-desc="Sensor Native Aspect" data-label="3:4 · Original Photo" data-ratio="original">
+<div class="w-full flex-1 flex items-center justify-center">
+<div class="w-6 h-8 rounded bg-surface-container-highest flex items-center justify-center">
+<span class="font-caption text-[9px] text-on-surface-variant font-bold">3:4</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm font-medium">Original</span>
+</button>
+<!-- 3. Square (1:1) -->
+<button class="ratio-chip min-w-[68px] h-20 bg-surface-container-high rounded-xl p-space-xs flex flex-col items-center justify-between transition-all active:scale-95 text-on-surface-variant" data-desc="Grid Feed Post" data-label="1:1 · Square (1080 × 1080)" data-ratio="1:1">
+<div class="w-full flex-1 flex items-center justify-center">
+<div class="w-7 h-7 rounded bg-surface-container-highest flex items-center justify-center">
+<span class="font-caption text-[9px] text-on-surface-variant font-bold">1:1</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm font-medium">Square</span>
+</button>
+<!-- 4. Portrait (4:5) [Selected] -->
+<button class="ratio-chip min-w-[68px] h-20 bg-surface-container-highest rounded-xl p-space-xs flex flex-col items-center justify-between transition-all active:scale-95 text-on-surface shadow-[0_0_16px_rgba(124,58,237,0.45)]" data-desc="Instagram / Gallery Standard" data-label="4:5 · Portrait (1080 × 1350)" data-ratio="4:5">
+<div class="w-full flex-1 flex items-center justify-center">
+<div class="w-6 h-8 rounded-md bg-primary-container flex items-center justify-center shadow-sm">
+<span class="font-caption text-[9px] text-on-primary-container font-extrabold">4:5</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm font-bold text-primary">Portrait</span>
+</button>
+<!-- 5. Story (9:16) -->
+<button class="ratio-chip min-w-[68px] h-20 bg-surface-container-high rounded-xl p-space-xs flex flex-col items-center justify-between transition-all active:scale-95 text-on-surface-variant" data-desc="Full Screen Mobile Vertical" data-label="9:16 · Reel / Story (1080 × 1920)" data-ratio="9:16">
+<div class="w-full flex-1 flex items-center justify-center">
+<div class="w-5 h-9 rounded bg-surface-container-highest flex items-center justify-center">
+<span class="font-caption text-[9px] text-on-surface-variant font-bold">9:16</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm font-medium">Story</span>
+</button>
+<!-- 6. Landscape (16:9) -->
+<button class="ratio-chip min-w-[68px] h-20 bg-surface-container-high rounded-xl p-space-xs flex flex-col items-center justify-between transition-all active:scale-95 text-on-surface-variant" data-desc="Widescreen Display" data-label="16:9 · Cinema (1920 × 1080)" data-ratio="16:9">
+<div class="w-full flex-1 flex items-center justify-center">
+<div class="w-9 h-5 rounded bg-surface-container-highest flex items-center justify-center">
+<span class="font-caption text-[9px] text-on-surface-variant font-bold">16:9</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm font-medium">Landscape</span>
+</button>
+<!-- 7. Post (3:2) -->
+<button class="ratio-chip min-w-[68px] h-20 bg-surface-container-high rounded-xl p-space-xs flex flex-col items-center justify-between transition-all active:scale-95 text-on-surface-variant" data-desc="Traditional DSLR Frame" data-label="3:2 · 35mm Classic (1500 × 1000)" data-ratio="3:2">
+<div class="w-full flex-1 flex items-center justify-center">
+<div class="w-8 h-6 rounded bg-surface-container-highest flex items-center justify-center">
+<span class="font-caption text-[9px] text-on-surface-variant font-bold">3:2</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm font-medium">Post</span>
+</button>
+</div>
+</div>
+<!-- Dedicated Tool Dock / Commit Footer -->
+<div class="w-full bg-surface-container-low p-space-sm rounded-2xl flex items-center justify-between gap-space-sm mb-space-sm shadow-lg">
+<!-- Revert Action -->
+<button class="h-11 px-space-lg rounded-xl bg-surface-container-high hover:bg-surface-container-highest text-on-surface-variant font-label-md text-label-md flex items-center gap-space-xs active:scale-95 transition-all" id="btn-cancel-crop">
+<span class="material-symbols-outlined text-[18px]">close</span>
+<span>Cancel</span>
+</button>
+<!-- Crop Status Feedback Indicator -->
+<div class="flex items-center gap-space-xs text-primary-fixed-dim">
+<span class="material-symbols-outlined text-[16px] text-primary">verified</span>
+<span class="font-caption text-caption uppercase tracking-wider font-semibold">Crop Applied</span>
+</div>
+<!-- Confirm Apply Action -->
+<button class="h-11 px-space-lg rounded-xl bg-primary-container text-on-primary-container font-label-md text-label-md flex items-center gap-space-xs shadow-[0_4px_16px_rgba(124,58,237,0.4)] active:scale-95 transition-all" id="btn-apply-crop">
+<span class="material-symbols-outlined text-[18px]">check</span>
+<span class="font-bold">Apply</span>
+</button>
+</div>
+</div>
+<script>
+  (function initCropWorkspace() {
+    let currentAngle = -2.5;
+    let rotationDeg = 0;
+    let flipX = 1;
+    let flipY = 1;
+
+    const canvasImg = document.getElementById('canvas-image-wrap');
+    const slider = document.getElementById('angle-slider');
+    const degreeDisplay = document.getElementById('slider-degree-display');
+    const canvasAngleText = document.getElementById('canvas-angle-text');
+    const rulerStrip = document.getElementById('ruler-strip');
+    const ratioLabel = document.getElementById('ratio-label');
+    const ratioDesc = document.getElementById('active-preset-desc');
+    const ratioChips = document.querySelectorAll('.ratio-chip');
+
+    function updateTransform() {
+      const totalAngle = currentAngle + rotationDeg;
+      canvasImg.style.transform = `scale(1.08) rotate(${totalAngle}deg) scaleX(${flipX}) scaleY(${flipY})`;
+      const formattedAngle = `${currentAngle > 0 ? '+' : ''}${currentAngle.toFixed(1)}°`;
+      degreeDisplay.textContent = formattedAngle;
+      canvasAngleText.textContent = formattedAngle;
+      rulerStrip.style.transform = `translateX(${currentAngle * -1.8}px)`;
+    }
+
+    slider.addEventListener('input', (e) => {
+      currentAngle = parseFloat(e.target.value);
+      updateTransform();
+    });
+
+    document.getElementById('btn-zero-snap').addEventListener('click', () => {
+      currentAngle = 0;
+      slider.value = 0;
+      updateTransform();
+    });
+
+    document.getElementById('btn-reset-angle').addEventListener('click', () => {
+      currentAngle = 0;
+      slider.value = 0;
+      updateTransform();
+    });
+
+    document.getElementById('auto-straighten-btn').addEventListener('click', () => {
+      currentAngle = 0.0;
+      slider.value = 0.0;
+      updateTransform();
+      const badge = document.getElementById('auto-straighten-btn');
+      badge.classList.add('bg-primary-container', 'text-on-primary-container');
+      setTimeout(() => {
+        badge.classList.remove('bg-primary-container', 'text-on-primary-container');
+      }, 600);
+    });
+
+    document.getElementById('btn-rot-left').addEventListener('click', () => {
+      rotationDeg = (rotationDeg - 90) % 360;
+      updateTransform();
+    });
+
+    document.getElementById('btn-rot-right').addEventListener('click', () => {
+      rotationDeg = (rotationDeg + 90) % 360;
+      updateTransform();
+    });
+
+    document.getElementById('btn-flip-h').addEventListener('click', () => {
+      flipX *= -1;
+      updateTransform();
+    });
+
+    document.getElementById('btn-flip-v').addEventListener('click', () => {
+      flipY *= -1;
+      updateTransform();
+    });
+
+    document.getElementById('btn-reset-all').addEventListener('click', () => {
+      currentAngle = 0;
+      rotationDeg = 0;
+      flipX = 1;
+      flipY = 1;
+      slider.value = 0;
+      updateTransform();
+    });
+
+    // Aspect Ratio Selection Handling
+    ratioChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        ratioChips.forEach(c => {
+          c.classList.remove('bg-surface-container-highest', 'text-on-surface', 'shadow-[0_0_16px_rgba(124,58,237,0.45)]');
+          c.classList.add('bg-surface-container-high', 'text-on-surface-variant');
+          const previewIcon = c.querySelector('div > div');
+          if (previewIcon) {
+            previewIcon.classList.remove('bg-primary-container', 'shadow-sm');
+            previewIcon.classList.add('bg-surface-container-highest');
+            const spanText = previewIcon.querySelector('span');
+            if (spanText) {
+              spanText.classList.remove('text-on-primary-container', 'font-extrabold');
+              spanText.classList.add('text-on-surface-variant');
+            }
+          }
+          const labelSpan = c.querySelector('span:last-child');
+          if (labelSpan) {
+            labelSpan.classList.remove('font-bold', 'text-primary');
+            labelSpan.classList.add('font-medium');
+          }
+        });
+
+        chip.classList.remove('bg-surface-container-high', 'text-on-surface-variant');
+        chip.classList.add('bg-surface-container-highest', 'text-on-surface', 'shadow-[0_0_16px_rgba(124,58,237,0.45)]');
+
+        const activeIcon = chip.querySelector('div > div');
+        if (activeIcon) {
+          activeIcon.classList.remove('bg-surface-container-highest');
+          activeIcon.classList.add('bg-primary-container', 'shadow-sm');
+          const spanText = activeIcon.querySelector('span');
+          if (spanText) {
+            spanText.classList.remove('text-on-surface-variant');
+            spanText.classList.add('text-on-primary-container', 'font-extrabold');
+          }
+        }
+
+        const activeLabelSpan = chip.querySelector('span:last-child');
+        if (activeLabelSpan) {
+          activeLabelSpan.classList.add('font-bold', 'text-primary');
+          activeLabelSpan.classList.remove('font-medium');
+        }
+
+        ratioLabel.textContent = chip.getAttribute('data-label');
+        ratioDesc.textContent = chip.getAttribute('data-desc');
+      });
+    });
+
+    // Commit Action feedback
+    document.getElementById('btn-apply-crop').addEventListener('click', function() {
+      this.classList.add('scale-90');
+      setTimeout(() => this.classList.remove('scale-90'), 150);
+    });
+
+    document.getElementById('btn-cancel-crop').addEventListener('click', function() {
+      this.classList.add('scale-90');
+      setTimeout(() => this.classList.remove('scale-90'), 150);
+    });
+  })();
+</script></main><nav class="fixed bottom-0 w-full z-50 pb-safe bg-surface-container-lowest/90 backdrop-blur-xl shadow-[0_-1px_12px_rgba(0,0,0,0.6)]" data-active-classes="text-primary font-bold"><div class="flex justify-around items-center h-20 px-space-sm"><a aria-current="page" class="flex flex-col items-center justify-center gap-space-2xs w-touch-target-min h-touch-target-min transition-colors text-primary font-bold" data-path="crop-mode" href="#"><span class="material-symbols-outlined text-[22px]">crop</span><span class="font-label-sm text-label-sm">Crop</span></a><a class="flex flex-col items-center justify-center gap-space-2xs w-touch-target-min h-touch-target-min text-on-surface-variant hover:text-on-surface transition-colors" data-path="adjust-mode" href="#"><span class="material-symbols-outlined text-[22px]">tune</span><span class="font-label-sm text-label-sm">Adjust</span></a><a class="flex flex-col items-center justify-center gap-space-2xs w-touch-target-min h-touch-target-min text-on-surface-variant hover:text-on-surface transition-colors" data-path="filters-mode" href="#"><span class="material-symbols-outlined text-[22px]">auto_awesome</span><span class="font-label-sm text-label-sm">Filters</span></a><a class="flex flex-col items-center justify-center gap-space-2xs w-touch-target-min h-touch-target-min text-on-surface-variant hover:text-on-surface transition-colors" data-path="blur-mode" href="#"><span class="material-symbols-outlined text-[22px]">lens_blur</span><span class="font-label-sm text-label-sm">Blur</span></a></div></nav></body></html>
