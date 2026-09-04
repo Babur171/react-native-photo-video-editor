@@ -2,6 +2,7 @@ package com.photovideoeditor.video.export
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
@@ -9,6 +10,7 @@ import android.os.Looper
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.Size
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
@@ -16,6 +18,7 @@ import androidx.media3.effect.HslAdjustment
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.ScaleAndRotateTransformation
+import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
@@ -23,9 +26,7 @@ import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
-import androidx.media3.transformer.TransformationRequest
 import androidx.media3.transformer.Transformer
-import com.google.common.collect.ImmutableList
 import com.photovideoeditor.files.SourceResolver
 import com.photovideoeditor.photo.render.PhotoLayer
 import com.photovideoeditor.photo.render.PhotoLayerRenderer
@@ -34,6 +35,7 @@ import com.photovideoeditor.video.render.VideoTransformState
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 data class VideoExportResult(
   val uri: String,
@@ -47,13 +49,13 @@ data class VideoExportResult(
 class VideoExportException(val code: String, message: String) : Exception(message)
 
 /**
- * Wraps Media3 Transformer to apply trim/mute/rotate/flip/aspect-ratio/overlays
+ * Wraps Media3 Transformer to apply trim/rotate/aspect-ratio/overlays
  * to the full-resolution source video and mux an H.264/AAC MP4. The source
  * file is never modified. Must be constructed and used from a thread with a
  * Looper (Transformer requirement) — the main thread satisfies this.
  *
  * Milestone 7 (multi-clip timeline): each [VideoClip] becomes its own
- * [EditedMediaItem] (own trim, same global rotate/flip/aspect/filter effects),
+ * [EditedMediaItem] (own trim, same global rotate/aspect/filter effects),
  * concatenated gapless via a single [EditedMediaItemSequence] passed to
  * [Composition] — verified against the actual Media3 1.4.1 bytecode (`javap`)
  * before writing this: `EditedMediaItemSequence(List<EditedMediaItem>)`,
@@ -79,6 +81,7 @@ class VideoExporter(private val context: Context) {
   private var outputFile: File? = null
   private var polling = false
   private val handler = Handler(Looper.getMainLooper())
+  private val overlayBitmaps = ConcurrentHashMap.newKeySet<Bitmap>()
 
   fun export(
     clips: List<VideoClip>,
@@ -89,6 +92,7 @@ class VideoExporter(private val context: Context) {
     onComplete: (VideoExportResult) -> Unit,
     onError: (VideoExportException) -> Unit
   ) {
+    releaseOverlayBitmaps()
     if (clips.isEmpty()) {
       onError(VideoExportException("E_SOURCE_NOT_FOUND", "There are no clips to export."))
       return
@@ -99,28 +103,16 @@ class VideoExporter(private val context: Context) {
     val output = File(outputDir, "${UUID.randomUUID()}.mp4")
     outputFile = output
 
-    val naturalSizeSourcePath = SourceResolver.resolvePath(context, clips.first().sourceUri, "pve_video_export")
-    if (naturalSizeSourcePath == null) {
-      onError(VideoExportException("E_SOURCE_NOT_FOUND", "The selected video could not be found."))
-      return
-    }
-    val (naturalWidth, naturalHeight) = readUprightVideoSize(naturalSizeSourcePath)
+    val (sourceWidth, sourceHeight) = readUprightVideoSize(mediaUri(clips.first().sourceUri))
 
     val editedItems = mutableListOf<EditedMediaItem>()
     var precedingDurationMs = 0L
     for (clip in clips) {
-      val path = SourceResolver.resolvePath(context, clip.sourceUri, "pve_video_export")
-      if (path == null) {
-        onError(VideoExportException("E_SOURCE_NOT_FOUND", "A clip's source video could not be found."))
-        return
-      }
-
       val effects = mutableListOf<Effect>()
-      if (state.rotationDegrees != 0 || state.flipHorizontal) {
+      if (state.rotationDegrees != 0) {
         effects.add(
           ScaleAndRotateTransformation.Builder()
             .setRotationDegrees(state.rotationDegrees.toFloat())
-            .setScale(if (state.flipHorizontal) -1f else 1f, 1f)
             .build()
         )
       }
@@ -152,17 +144,35 @@ class VideoExporter(private val context: Context) {
         var cachedBitmap: Bitmap? = null
         effects.add(
           OverlayEffect(
-            ImmutableList.of(
+            listOf<TextureOverlay>(
               object : BitmapOverlay() {
+                @Volatile private var outputWidth = sourceWidth.coerceAtLeast(2)
+                @Volatile private var outputHeight = sourceHeight.coerceAtLeast(2)
+
+                override fun configure(videoSize: Size) {
+                  super.configure(videoSize)
+                  // Media3 maps a same-aspect overlay texture onto the complete background
+                  // frame. Bound the longest edge to avoid allocating a huge ARGB bitmap for
+                  // extreme (4K/8K) outputs, while preserving exact normalized geometry. The
+                  // cap is set to cover common Full HD exports (1920px long edge) natively —
+                  // a lower cap visibly softens overlay text/sticker edges vs. the preview,
+                  // since it downscales the overlay before compositing.
+                  val scale = minOf(1f, MAX_OVERLAY_EDGE_PX / maxOf(videoSize.width, videoSize.height).coerceAtLeast(1))
+                  outputWidth = (videoSize.width * scale).toInt().coerceAtLeast(2)
+                  outputHeight = (videoSize.height * scale).toInt().coerceAtLeast(2)
+                }
+
                 override fun getBitmap(presentationTimeUs: Long): Bitmap {
                   val positionMs = presentationTimeUs / 1000 + clipOffsetMs
                   val activeLayers = layers.filter { it.isActiveAt(positionMs, totalDurationMs) }
                   val signature = activeLayers.map { it.id }
                   if (signature != cachedSignature || cachedBitmap == null) {
-                    cachedBitmap = PhotoLayerRenderer.render(
-                      Bitmap.createBitmap(naturalWidth, naturalHeight, Bitmap.Config.ARGB_8888),
-                      activeLayers
-                    ) { uri -> resolveSticker(context, uri) }
+                    val input = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+                    cachedBitmap = PhotoLayerRenderer.render(input, activeLayers) { uri -> resolveImageUri(context, uri) }
+                    if (cachedBitmap !== input && !input.isRecycled) input.recycle()
+                    // BitmapOverlay may retain the returned frame in the GL
+                    // pipeline. Keep it alive until Transformer terminates.
+                    cachedBitmap?.let { overlayBitmaps.add(it) }
                     cachedSignature = signature
                   }
                   return cachedBitmap!!
@@ -174,7 +184,7 @@ class VideoExporter(private val context: Context) {
       }
 
       val mediaItem = MediaItem.Builder()
-        .setUri(Uri.fromFile(File(path)))
+        .setUri(mediaUri(clip.sourceUri))
         .setClippingConfiguration(
           MediaItem.ClippingConfiguration.Builder()
             .setStartPositionMs(clip.trimStartMs)
@@ -187,7 +197,6 @@ class VideoExporter(private val context: Context) {
       editedItems.add(
         EditedMediaItem.Builder(mediaItem)
           .setEffects(Effects(emptyList(), effects))
-          .setRemoveAudio(state.muted)
           .build()
       )
       precedingDurationMs += clip.trimmedDurationMs()
@@ -195,15 +204,18 @@ class VideoExporter(private val context: Context) {
 
     val composition = Composition.Builder(EditedMediaItemSequence(editedItems)).build()
 
-    val requestBuilder = TransformationRequest.Builder().setVideoMimeType(MimeTypes.VIDEO_H264)
-    if (!state.muted) requestBuilder.setAudioMimeType(MimeTypes.AUDIO_AAC)
+    val transformerBuilder = Transformer.Builder(context)
+      .setVideoMimeType(MimeTypes.VIDEO_H264)
+      .setAudioMimeType(MimeTypes.AUDIO_AAC)
 
-    val builtTransformer = Transformer.Builder(context)
-      .setTransformationRequest(requestBuilder.build())
+    val builtTransformer = transformerBuilder
       .addListener(object : Transformer.Listener {
         override fun onCompleted(composition: Composition, exportResult: ExportResult) {
           polling = false
           transformer = null
+          // The completed file now belongs to the caller. cancel()/destroy must
+          // never delete it after the editor activity finishes.
+          outputFile = null
           onComplete(
             VideoExportResult(
               uri = Uri.fromFile(output).toString(),
@@ -214,31 +226,41 @@ class VideoExporter(private val context: Context) {
               mimeType = "video/mp4"
             )
           )
+          releaseOverlayBitmaps()
         }
 
         override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
           polling = false
           transformer = null
           output.delete()
+          releaseOverlayBitmaps()
           onError(VideoExportException("E_EXPORT_FAILED", exportException.message ?: "Unable to export the video."))
         }
       })
       .build()
     transformer = builtTransformer
-    builtTransformer.start(composition, output.absolutePath)
-    startPolling(onProgress)
+    try {
+      builtTransformer.start(composition, output.absolutePath)
+      startPolling(onProgress)
+    } catch (error: Exception) {
+      polling = false
+      transformer = null
+      output.delete()
+      releaseOverlayBitmaps()
+      onError(VideoExportException("E_EXPORT_FAILED", error.message ?: "Unable to start video export."))
+    }
   }
 
-  private fun resolveSticker(context: Context, uri: String): Bitmap? {
-    val path = SourceResolver.resolvePath(context, uri, "pve_video_sticker_export") ?: return null
-    return android.graphics.BitmapFactory.decodeFile(path)
+  private fun resolveImageUri(context: Context, uri: String): Bitmap? {
+    val path = SourceResolver.resolvePath(context, uri, "pve_video_layer_image_export") ?: return null
+    return BitmapFactory.decodeFile(path)
   }
 
   /** The video's decoded frame size after its own rotation metadata is applied (i.e. as it will actually be displayed/exported before any additional user rotation/crop). */
-  private fun readUprightVideoSize(path: String): Pair<Int, Int> {
+  private fun readUprightVideoSize(uri: Uri): Pair<Int, Int> {
     val retriever = MediaMetadataRetriever()
     return try {
-      retriever.setDataSource(path)
+      retriever.setDataSource(context, uri)
       val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 1280
       val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 720
       val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
@@ -250,6 +272,11 @@ class VideoExporter(private val context: Context) {
     }
   }
 
+  private fun mediaUri(value: String): Uri {
+    val parsed = Uri.parse(value)
+    return if (parsed.scheme == null) Uri.fromFile(File(value)) else parsed
+  }
+
   private fun startPolling(onProgress: (Float) -> Unit) {
     polling = true
     val holder = ProgressHolder()
@@ -257,9 +284,13 @@ class VideoExporter(private val context: Context) {
       override fun run() {
         val current = transformer
         if (current == null || !polling) return
-        current.getProgress(holder)
-        onProgress((holder.progress.coerceIn(0, 100)) / 100f)
-        handler.postDelayed(this, 300)
+        try {
+          current.getProgress(holder)
+          onProgress((holder.progress.coerceIn(0, 100)) / 100f)
+          if (polling) handler.postDelayed(this, 300)
+        } catch (_: IllegalStateException) {
+          // Transformer completed/cancelled between the null check and poll.
+        }
       }
     }
     handler.postDelayed(runnable, 300)
@@ -268,9 +299,21 @@ class VideoExporter(private val context: Context) {
   /** Cancels an in-progress export and deletes the partial output file. */
   fun cancel() {
     polling = false
+    handler.removeCallbacksAndMessages(null)
     transformer?.cancel()
     transformer = null
     outputFile?.delete()
     outputFile = null
+    releaseOverlayBitmaps()
+  }
+
+  private fun releaseOverlayBitmaps() {
+    overlayBitmaps.forEach { if (!it.isRecycled) it.recycle() }
+    overlayBitmaps.clear()
+  }
+
+  private companion object {
+    /** Overlay-compositing bitmap longest-edge cap; see the comment at its call site. */
+    const val MAX_OVERLAY_EDGE_PX = 1920f
   }
 }

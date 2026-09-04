@@ -16,7 +16,9 @@ final class PhotoEditSession {
   private var cachedPreviewImage: UIImage?
   private weak var cachedPreviewBaseImage: UIImage?
   private var cachedPreviewLayerRevision: UInt64?
-  private var stickerCache: [String: UIImage?] = [:]
+  /// Resolved images for both sticker-uri and overlay-uri layers — the lookup logic is identical
+  /// for either layer type, so one cache/resolver serves both.
+  private var imageLayerCache: [String: UIImage?] = [:]
 
   init(sourceUri: String, maxPreviewDimension: CGFloat = 1600) {
     baseImage = PhotoEditSession.decodeUpright(sourceUri: sourceUri, maxDimension: maxPreviewDimension)
@@ -37,7 +39,7 @@ final class PhotoEditSession {
       return cached
     }
     let transformed: UIImage
-    if state.rotationDegrees == 0 && state.straightenDegrees == 0 && state.flip == .none {
+    if state.rotationDegrees == 0 && state.straightenDegrees == 0 {
       transformed = base
     } else {
       transformed = PhotoEditSession.applyTransform(base, state: state)
@@ -57,7 +59,7 @@ final class PhotoEditSession {
        let cachedPreviewImage {
       return cachedPreviewImage
     }
-    let rendered = PhotoLayerRenderer.render(base, layers: layerStack.layers) { [weak self] uri in self?.resolveSticker(uri) }
+    let rendered = PhotoLayerRenderer.render(base, layers: layerStack.layers) { [weak self] uri in self?.resolveImageLayer(uri) }
     cachedPreviewBaseImage = base
     cachedPreviewLayerRevision = layerStack.revision
     cachedPreviewImage = rendered
@@ -71,14 +73,14 @@ final class PhotoEditSession {
     cachedPreviewImage = nil
     cachedPreviewBaseImage = nil
     cachedPreviewLayerRevision = nil
-    stickerCache.removeAll()
+    imageLayerCache.removeAll()
   }
 
-  private func resolveSticker(_ uri: String) -> UIImage? {
-    if let cached = stickerCache[uri] { return cached }
-    let path = SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_sticker")
+  private func resolveImageLayer(_ uri: String) -> UIImage? {
+    if let cached = imageLayerCache[uri] { return cached }
+    let path = SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_layer_image")
     let image = path.flatMap { UIImage(contentsOfFile: $0) }
-    stickerCache[uri] = image
+    imageLayerCache[uri] = image
     return image
   }
 
@@ -91,7 +93,7 @@ final class PhotoEditSession {
   }
 
   static func applyTransform(_ image: UIImage, state: PhotoTransformState) -> UIImage {
-    guard state.rotationDegrees != 0 || state.straightenDegrees != 0 || state.flip != .none else { return image }
+    guard state.rotationDegrees != 0 || state.straightenDegrees != 0 else { return image }
     let radians = state.totalRotationRadians
     let rotatedBounds = CGRect(origin: .zero, size: image.size).applying(CGAffineTransform(rotationAngle: radians))
     let canvasSize = CGSize(width: abs(rotatedBounds.width), height: abs(rotatedBounds.height))
@@ -100,9 +102,6 @@ final class PhotoEditSession {
       let ctx = context.cgContext
       ctx.translateBy(x: canvasSize.width / 2, y: canvasSize.height / 2)
       ctx.rotate(by: radians)
-      let scaleX: CGFloat = state.flip == .horizontal ? -1 : 1
-      let scaleY: CGFloat = state.flip == .vertical ? -1 : 1
-      ctx.scaleBy(x: scaleX, y: scaleY)
       image.draw(in: CGRect(x: -image.size.width / 2, y: -image.size.height / 2, width: image.size.width, height: image.size.height))
     }
   }

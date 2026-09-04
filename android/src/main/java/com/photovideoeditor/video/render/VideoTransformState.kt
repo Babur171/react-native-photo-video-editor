@@ -8,9 +8,7 @@ package com.photovideoeditor.video.render
  * not a position within any single clip's own source file.
  */
 data class VideoTransformState(
-  val muted: Boolean = false,
   val rotationDegrees: Int = 0,
-  val flipHorizontal: Boolean = false,
   val aspectRatio: Float? = null,
   val coverFrameMs: Long = 0L,
   /** Preview-only for now: cycled via the Speed tool. Export does not yet honor this — see docs/video-editor.md. */
@@ -23,8 +21,6 @@ data class VideoTransformState(
   val saturation: Float = 0f
 ) {
   fun rotatedRight(): VideoTransformState = copy(rotationDegrees = (rotationDegrees + 90) % 360)
-  fun toggledMute(): VideoTransformState = copy(muted = !muted)
-  fun toggledFlip(): VideoTransformState = copy(flipHorizontal = !flipHorizontal)
   fun withAspectRatio(ratio: Float?): VideoTransformState = copy(aspectRatio = ratio)
   fun withCoverFrame(atMs: Long): VideoTransformState = copy(coverFrameMs = atMs)
 

@@ -27,13 +27,6 @@ struct VideoExportError: Error {
 /// multi-segment concatenation natively, so no Media3-style multi-item
 /// `Composition`/`EditedMediaItemSequence` equivalent is needed here.
 ///
-/// Note: aspect-ratio cropping is Android-only for now. Combining it
-/// correctly with the source's own orientation-correcting transform and an
-/// additional user rotation in `AVMutableVideoCompositionLayerInstruction`'s
-/// coordinate space is easy to get subtly wrong, and there is no device
-/// available in this environment to verify the pixel math — so it is scoped
-/// out here rather than shipped unverified. Rotate/flip use the well-known,
-/// low-risk 90°-increment recipe below instead of general-purpose crop math.
 final class VideoExporter {
   private var exportSession: AVAssetExportSession?
   private var progressTimer: Timer?
@@ -59,7 +52,7 @@ final class VideoExporter {
       onError(VideoExportError(code: "E_INTERNAL", message: "Unable to build the export composition."))
       return
     }
-    let compositionAudioTrack = state.muted ? nil : composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+    let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
 
     var sourceVideoTrack: AVAssetTrack?
     var cursor = CMTime.zero
@@ -100,10 +93,6 @@ final class VideoExporter {
     let uprightHeight = abs(uprightSize.height)
 
     var transform = baseTransform
-    if state.flipHorizontal {
-      transform = transform.concatenating(CGAffineTransform(scaleX: -1, y: 1))
-      transform = transform.concatenating(CGAffineTransform(translationX: uprightWidth, y: 0))
-    }
 
     let normalizedRotation = ((state.rotationDegrees % 360) + 360) % 360
     var renderWidth = uprightWidth
@@ -127,6 +116,21 @@ final class VideoExporter {
       }
     }
 
+    // Crop around the transformed video's center. The same normalized layer
+    // coordinates are then evaluated against this final output rectangle.
+    if let targetRatio = state.aspectRatio, targetRatio > 0 {
+      let currentRatio = renderWidth / renderHeight
+      if currentRatio > targetRatio {
+        let croppedWidth = renderHeight * targetRatio
+        transform = transform.concatenating(CGAffineTransform(translationX: -(renderWidth - croppedWidth) / 2, y: 0))
+        renderWidth = croppedWidth
+      } else if currentRatio < targetRatio {
+        let croppedHeight = renderWidth / targetRatio
+        transform = transform.concatenating(CGAffineTransform(translationX: 0, y: -(renderHeight - croppedHeight) / 2))
+        renderHeight = croppedHeight
+      }
+    }
+
     let videoComposition = AVMutableVideoComposition()
     videoComposition.renderSize = CGSize(width: renderWidth, height: renderHeight)
     videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
@@ -138,29 +142,49 @@ final class VideoExporter {
     instruction.layerInstructions = [layerInstruction]
     videoComposition.instructions = [instruction]
 
-    // KNOWN LIMITATION (iOS-only): every overlay is burned in for the WHOLE clip here, ignoring
-    // PhotoLayer.startMs/endMs, even though the editor UI now lets a user set a time range per
-    // overlay (see LayerOverlayView-based selection in PhotoVideoEditorViewController). Android
-    // respects the range via a per-frame BitmapOverlay callback keyed on presentation time; doing
-    // the same on iOS needs a custom AVVideoCompositing implementation, since
-    // AVVideoCompositionCoreAnimationTool only composites a fixed CALayer tree, not one that changes
-    // per frame. That's a bigger, separate change — see docs/video-editor.md.
     if !layers.isEmpty {
       let renderSize = CGSize(width: renderWidth, height: renderHeight)
-      let renderer = PhotoEditSession.pixelRenderer(size: renderSize)
+      let longestEdge = max(renderSize.width, renderSize.height)
+      let overlayScale = min(1, 1280 / max(longestEdge, 1))
+      let overlayRenderSize = CGSize(
+        width: max(2, floor(renderSize.width * overlayScale)),
+        height: max(2, floor(renderSize.height * overlayScale))
+      )
+      let renderer = PhotoEditSession.pixelRenderer(size: overlayRenderSize)
       let transparentBase = renderer.image { _ in }
-      let overlayImage = PhotoLayerRenderer.render(transparentBase, layers: layers) { uri in
-        SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_video_sticker_export").flatMap { UIImage(contentsOfFile: $0) }
-      }
       let videoLayer = CALayer()
       videoLayer.frame = CGRect(origin: .zero, size: renderSize)
-      let overlayLayer = CALayer()
-      overlayLayer.frame = videoLayer.frame
-      overlayLayer.contents = overlayImage.cgImage
       let parentLayer = CALayer()
       parentLayer.frame = videoLayer.frame
       parentLayer.addSublayer(videoLayer)
-      parentLayer.addSublayer(overlayLayer)
+      let durationSeconds = max(CMTimeGetSeconds(timeRange.duration), 0.001)
+      let visibleLayers = layers.filter(\.visible)
+      // Merge only adjacent layers with identical timing. This collapses the
+      // common full-duration stack to one bitmap without changing z-order.
+      var timingGroups: [(key: String, layers: [PhotoLayer])] = []
+      for layer in visibleLayers {
+        let key = "\(max(0, layer.startMs)):\(layer.effectiveEndMs(durationMs: durationMs))"
+        if timingGroups.last?.key == key {
+          timingGroups[timingGroups.count - 1].layers.append(layer)
+        } else {
+          timingGroups.append((key, [layer]))
+        }
+      }
+      for entry in timingGroups {
+        let group = entry.layers
+        guard let representative = group.first else { continue }
+        autoreleasepool {
+        let image = PhotoLayerRenderer.render(transparentBase, layers: group) { uri in
+          SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_video_layer_export").flatMap { UIImage(contentsOfFile: $0) }
+        }
+        let surface = CALayer()
+        surface.frame = parentLayer.bounds
+        surface.contents = image.cgImage
+        surface.contentsGravity = .resizeAspect
+        applyVisibilityTiming(to: surface, layer: representative, durationMs: durationMs, durationSeconds: durationSeconds)
+        parentLayer.addSublayer(surface)
+        }
+      }
       videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parentLayer)
     }
 
@@ -189,6 +213,7 @@ final class VideoExporter {
       self.progressTimer?.invalidate()
       switch session.status {
       case .completed:
+        self.outputURL = nil
         let attributes = try? FileManager.default.attributesOfItem(atPath: output.path)
         let fileSize = (attributes?[.size] as? Int) ?? 0
         onComplete(
@@ -209,6 +234,37 @@ final class VideoExporter {
         onError(VideoExportError(code: "E_EXPORT_FAILED", message: session.error?.localizedDescription ?? "Unable to export the video."))
       }
     }
+  }
+
+  private func applyVisibilityTiming(to surface: CALayer, layer: PhotoLayer, durationMs: Int64, durationSeconds: Double) {
+    let start = min(max(layer.startMs, 0), durationMs)
+    let end = layer.effectiveEndMs(durationMs: durationMs)
+    if start == 0 && end >= durationMs {
+      surface.opacity = 1
+      return
+    }
+    let animation = CAKeyframeAnimation(keyPath: "opacity")
+    var values: [NSNumber] = []
+    var times: [NSNumber] = []
+    if start > 0 {
+      values.append(0); times.append(0)
+      values.append(1); times.append(NSNumber(value: Double(start) / Double(max(durationMs, 1))))
+    } else {
+      values.append(1); times.append(0)
+    }
+    if end < durationMs {
+      values.append(0); times.append(NSNumber(value: Double(end) / Double(max(durationMs, 1))))
+    } else {
+      values.append(1); times.append(1)
+    }
+    animation.values = values
+    animation.keyTimes = times
+    animation.calculationMode = .discrete
+    animation.beginTime = AVCoreAnimationBeginTimeAtZero
+    animation.duration = durationSeconds
+    animation.fillMode = .both
+    animation.isRemovedOnCompletion = false
+    surface.add(animation, forKey: "overlayVisibility")
   }
 
   func cancel() {

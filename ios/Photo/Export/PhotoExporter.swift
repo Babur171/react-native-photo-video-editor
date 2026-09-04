@@ -52,7 +52,7 @@ enum PhotoExporter {
 
     let transformed = PhotoEditSession.applyTransform(upright, state: transform)
     let adjusted = PhotoAdjustmentRenderer.apply(transformed, adjustments: adjustments)
-    let layered = PhotoLayerRenderer.render(adjusted, layers: layers) { uri in resolveSticker(uri) }
+    let layered = PhotoLayerRenderer.render(adjusted, layers: layers) { uri in resolveImageLayer(uri) }
     let cropped = crop(layered, transform: transform)
     let resized = resize(cropped, maxWidth: maxWidth, maxHeight: maxHeight)
 
@@ -99,8 +99,10 @@ enum PhotoExporter {
     )
   }
 
-  private static func resolveSticker(_ uri: String) -> UIImage? {
-    guard let path = SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_sticker_export") else { return nil }
+  /// Export-time, one-shot resolver for sticker-uri and overlay-uri layers alike (no cache needed —
+  /// export runs once per invocation).
+  private static func resolveImageLayer(_ uri: String) -> UIImage? {
+    guard let path = SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_layer_export") else { return nil }
     return UIImage(contentsOfFile: path)
   }
 

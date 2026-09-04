@@ -24,13 +24,12 @@ const videoFormats = new Set<VideoExportFormat>(['mp4', 'mov']);
 const defaultFeatures = {
   crop: true,
   rotate: true,
-  flip: true,
   trim: true,
-  mute: true,
   filters: true,
   text: true,
   stickers: true,
-  draw: true,
+  overlays: true,
+  onlineStickers: true,
 };
 
 function invalid(message: string): never {
@@ -76,7 +75,6 @@ function normalizeOptions(input: EditorOptions): EditorOptions {
   const features = { ...defaultFeatures, ...input.features };
   if (input.source.type === 'photo') {
     features.trim = false;
-    features.mute = false;
   }
   return {
     ...input,

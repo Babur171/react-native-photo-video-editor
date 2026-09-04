@@ -11,11 +11,13 @@ Pod::Spec.new do |s|
   s.authors      = package["author"]
 
   s.platforms    = { :ios => min_ios_version_supported }
-  # Replace this placeholder before publishing.
-  s.source       = { :git => "https://example.invalid/REPOSITORY_PLACEHOLDER.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/Babur171/react-native-photo-video-editor.git", :tag => "#{s.version}" }
 
   s.source_files = "ios/**/*.{h,m,mm,swift,cpp}"
   s.private_header_files = "ios/**/*.h"
+  # ios/Tests holds XCTest-based unit tests, not library sources — XCTest isn't linked into
+  # consumer app targets, so these must never ship as part of the pod's normal build.
+  s.exclude_files = "ios/Tests/**/*"
 
   install_modules_dependencies(s)
 end

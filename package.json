@@ -32,6 +32,8 @@
     "!android/gradlew",
     "!android/gradlew.bat",
     "!android/local.properties",
+    "!android/src/test",
+    "!ios/Tests",
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
@@ -61,9 +63,16 @@
     "swift",
     "turbo-module"
   ],
-  "author": "AUTHOR_NAME_PLACEHOLDER",
+  "author": "Babur171",
   "license": "MIT",
-  "homepage": "https://example.invalid/REPOSITORY_PLACEHOLDER",
+  "homepage": "https://github.com/Babur171/react-native-photo-video-editor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Babur171/react-native-photo-video-editor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Babur171/react-native-photo-video-editor/issues"
+  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },

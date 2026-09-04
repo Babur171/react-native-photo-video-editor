@@ -34,26 +34,29 @@ import com.photovideoeditor.files.SourceResolver
 import com.photovideoeditor.photo.export.PhotoExportException
 import com.photovideoeditor.photo.export.PhotoExporter
 import com.photovideoeditor.photo.render.LayerType
-import com.photovideoeditor.photo.render.PhotoAdjustmentRenderer
 import com.photovideoeditor.photo.render.PhotoAdjustments
-import com.photovideoeditor.photo.render.PhotoDepthBlur
 import com.photovideoeditor.photo.render.PhotoEditSession
 import com.photovideoeditor.photo.render.PhotoFilterPresets
 import com.photovideoeditor.photo.render.PhotoLayer
 import com.photovideoeditor.photo.render.PhotoLayerRenderer
-import com.photovideoeditor.photo.render.ShapeKind
 import com.photovideoeditor.photo.ui.CropOverlayView
-import com.photovideoeditor.photo.ui.DrawOverlayView
+import com.photovideoeditor.photo.ui.FilterThumbnailLoader
 import com.photovideoeditor.video.export.VideoExportException
 import com.photovideoeditor.video.export.VideoExporter
+import com.photovideoeditor.video.cache.TimelineThumbnailRepository
 import com.photovideoeditor.video.render.VideoClip
 import com.photovideoeditor.video.render.VideoEditSession
-import com.photovideoeditor.video.render.VideoThumbnailGenerator
 import com.photovideoeditor.video.ui.TrimRangeView
 import com.photovideoeditor.photo.ui.LayerOverlayView
+import com.photovideoeditor.photo.ui.PhotoPreviewRenderCoordinator
 import com.photovideoeditor.photo.ui.ZoomableImageView
+import com.photovideoeditor.stickers.OnlineStickerSheet
 import com.photovideoeditor.ui.DesignTokens
+import com.photovideoeditor.ui.components.applyPressScale
+import com.photovideoeditor.ui.components.editorChip
+import com.photovideoeditor.ui.components.editorPrimaryButton
 import org.json.JSONObject
+import java.io.File
 import kotlin.math.roundToInt
 
 class PhotoVideoEditorActivity : Activity() {
@@ -66,8 +69,8 @@ class PhotoVideoEditorActivity : Activity() {
   private var cropMode = false
   private var adjustMode = false
   private var filtersMode = false
-  private var drawMode = false
   private var stickersMode = false
+  private lateinit var stickersSubBar: View
   private var activeAdjustmentKey = "brightness"
   private var selectedLayerId: String? = null
   private var activeLayerPropertyKey = "scale"
@@ -75,23 +78,20 @@ class PhotoVideoEditorActivity : Activity() {
   private lateinit var photoImageView: ZoomableImageView
   private lateinit var cropOverlay: CropOverlayView
   private lateinit var layerOverlay: LayerOverlayView
-  private lateinit var drawOverlay: DrawOverlayView
   private lateinit var straightenSeekBar: SeekBar
   private lateinit var cropSubBar: View
   private lateinit var adjustmentSeekBar: SeekBar
   private lateinit var filtersSubBar: View
   private lateinit var adjustSubBar: View
-  private lateinit var stickersSubBar: View
-  private lateinit var drawSubBar: View
   private lateinit var layerToolBar: View
   private lateinit var layerPropertySeekBar: SeekBar
   private lateinit var layerColorSwatchRow: View
   private lateinit var mainToolBar: View
-  private lateinit var photoQuickActions: View
   private lateinit var undoButton: ImageButton
   private lateinit var redoButton: ImageButton
   private lateinit var exportProgressView: View
-  private var photoPreviewRenderPending = false
+  private var photoPreviewRenderer: PhotoPreviewRenderCoordinator? = null
+  private val filterThumbnailLoader = FilterThumbnailLoader()
   private var comparingOriginal = false
 
   private var videoSession: VideoEditSession? = null
@@ -108,27 +108,23 @@ class PhotoVideoEditorActivity : Activity() {
   private lateinit var videoOverlayImageView: ImageView
   private var videoOverlayBitmap: Bitmap? = null
   private var videoOverlayRenderKey: String? = null
-  private val videoStickerCache = mutableMapOf<String, Bitmap?>()
   private val positionPollHandler = android.os.Handler(android.os.Looper.getMainLooper())
   private var positionPollRunnable: Runnable? = null
   private var seeking = false
 
   private val photoToolButtons = mutableMapOf<String, ToolNode>()
+  private var photoToolScroll: HorizontalScrollView? = null
   private val cropAspectButtons = mutableMapOf<Float?, Button>()
   private val filterAdjustmentButtons = mutableMapOf<String, Button>()
   /** Preset id ("" = Original) -> (thumbnail frame, label) for the Filters preset-card scroller. */
   private val filterPresetCards = mutableMapOf<String, Pair<FrameLayout, TextView>>()
-  private var blurMode = false
-  private lateinit var blurSubBar: View
-  private lateinit var blurSeekBar: SeekBar
-  private var activeBlurKey = "intensity"
-  private val blurKeyButtons = mutableMapOf<String, Button>()
-  private val blurModeButtons = mutableMapOf<PhotoDepthBlur.Mode?, Button>()
   private var resizeMode = false
   private lateinit var resizeSubBar: View
   private var resizePresetSize: Pair<Int, Int>? = null
   private val resizePresetButtons = mutableMapOf<Pair<Int, Int>?, Button>()
   private val layerPropertyButtons = mutableMapOf<String, Button>()
+  /** Non-Delete/Duplicate layer action icons, hidden for TEXT layers (only Opacity/Colors/Duplicate/Delete apply there). */
+  private val layerIconButtons = mutableMapOf<String, View>()
   private val videoToolButtons = mutableMapOf<String, ToolNode>()
   private val videoAspectButtons = mutableMapOf<Float?, Button>()
   private val videoFilterButtons = mutableMapOf<String, Button>()
@@ -145,7 +141,9 @@ class PhotoVideoEditorActivity : Activity() {
   private val videoLayerPropertyButtons = mutableMapOf<String, Button>()
   private var selectedClipIndex = 0
   private lateinit var clipStripBar: LinearLayout
-  private val clipThumbnailCache = mutableMapOf<String, List<Bitmap>>()
+  private var timelineThumbnailRepository: TimelineThumbnailRepository? = null
+  private var timelineThumbnailRequest: TimelineThumbnailRepository.Request? = null
+  private val videoImageLayerCache = mutableMapOf<String, Bitmap?>()
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -228,6 +226,12 @@ class PhotoVideoEditorActivity : Activity() {
       setImageBitmap(session.renderPreview())
     }
     photoImageView = imageView
+    photoPreviewRenderer = PhotoPreviewRenderCoordinator(
+      render = { session.renderPreview() },
+      display = { bitmap ->
+        if (!comparingOriginal && !isFinishing && !isDestroyed) imageView.setImageBitmap(bitmap)
+      },
+    )
     previewContainer.addView(imageView, FrameLayout.LayoutParams(MATCH, MATCH))
 
     previewContainer.addView(TextView(this).apply {
@@ -250,24 +254,21 @@ class PhotoVideoEditorActivity : Activity() {
     layerOverlay = layers
     previewContainer.addView(layers, FrameLayout.LayoutParams(MATCH, MATCH))
 
-    val drawing = DrawOverlayView(this).apply { visibility = View.GONE }
-    drawOverlay = drawing
-    previewContainer.addView(drawing, FrameLayout.LayoutParams(MATCH, MATCH))
-
     imageView.onBoundsChanged = { bounds ->
       if (cropMode) overlay.setImageBounds(bounds, resetCrop = false)
       layers.setImageBounds(bounds)
-      drawing.setImageBounds(bounds)
     }
     overlay.onCropChanged = { left, top, right, bottom -> session.update { it.withCrop(left, top, right, bottom) } }
     layers.onLayerTapped = { id -> selectLayer(id) }
-    layers.onLayerDragged = { id, x, y ->
+    layers.onLayerTransformChanged = { id, x, y, scale, rotation ->
       if (dragStartSnapshot == null) dragStartSnapshot = session.layerStack.layers
-      session.layerStack.updateLive { list -> list.map { if (it.id == id) it.copy(x = x, y = y) else it } }
+      session.layerStack.updateLive { list ->
+        list.map { if (it.id == id) it.copy(x = x, y = y, scale = scale, rotationDegrees = rotation) else it }
+      }
       layerOverlay.layers = session.layerStack.layers
       schedulePhotoPreviewRender()
     }
-    layers.onLayerDragEnded = {
+    layers.onLayerTransformEnded = {
       dragStartSnapshot?.let { session.layerStack.commitSnapshot(it) }
       dragStartSnapshot = null
       onLayerStackChanged()
@@ -331,26 +332,6 @@ class PhotoVideoEditorActivity : Activity() {
     adjustBar.visibility = View.GONE
     root.addView(adjustBar, LinearLayout.LayoutParams(MATCH, dp(ADJUST_SUB_BAR_HEIGHT_DP)))
 
-    val blurSeek = SeekBar(this).apply {
-      visibility = View.GONE
-      setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-        override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-          if (!fromUser) return
-          session.updateDepthBlur { withBlurValue(it, activeBlurKey, progress.toFloat()) }
-          schedulePhotoPreviewRender()
-        }
-        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-      })
-    }
-    blurSeekBar = blurSeek
-    root.addView(blurSeek, LinearLayout.LayoutParams(MATCH, WRAP).apply { setMargins(dp(16), dp(4), dp(16), 0) })
-
-    val blurBar = createBlurSubBar(session, imageView)
-    blurSubBar = blurBar
-    blurBar.visibility = View.GONE
-    root.addView(blurBar, LinearLayout.LayoutParams(MATCH, dp(56)))
-
     val filtersBar = createFiltersSubBar(session, imageView)
     filtersSubBar = filtersBar
     filtersBar.visibility = View.GONE
@@ -360,11 +341,6 @@ class PhotoVideoEditorActivity : Activity() {
     stickersSubBar = stickersBar
     stickersBar.visibility = View.GONE
     root.addView(stickersBar, LinearLayout.LayoutParams(MATCH, dp(ASSET_GRID_BAR_HEIGHT_DP)))
-
-    val drawBar = createDrawSubBar(session)
-    drawSubBar = drawBar
-    drawBar.visibility = View.GONE
-    root.addView(drawBar, LinearLayout.LayoutParams(MATCH, dp(56)))
 
     val layerPropertySeek = SeekBar(this).apply {
       visibility = View.GONE
@@ -390,10 +366,6 @@ class PhotoVideoEditorActivity : Activity() {
     layerBar.visibility = View.GONE
     root.addView(layerBar, LinearLayout.LayoutParams(MATCH, dp(56)))
 
-    val quickActions = createPhotoQuickActions(session, imageView, overlay)
-    photoQuickActions = quickActions
-    root.addView(quickActions, LinearLayout.LayoutParams(MATCH, dp(52)))
-
     val toolbarHeight = dp(76)
     val toolbar = createPhotoToolBar(session, imageView, overlay)
     mainToolBar = toolbar
@@ -406,62 +378,23 @@ class PhotoVideoEditorActivity : Activity() {
         toolbar to toolbarHeight,
         cropBar to dp(CROP_SUB_BAR_HEIGHT_DP),
         adjustBar to dp(ADJUST_SUB_BAR_HEIGHT_DP),
-        blurBar to dp(56),
         resizeBar to dp(56),
         filtersBar to dp(FILTERS_SUB_BAR_HEIGHT_DP),
         stickersBar to dp(ASSET_GRID_BAR_HEIGHT_DP),
-        drawBar to dp(56),
         layerBar to dp(56)
       )
     )
     return outer
   }
 
-  private fun createPhotoQuickActions(
-    session: PhotoEditSession,
-    imageView: ZoomableImageView,
-    overlay: CropOverlayView
-  ): View = HorizontalScrollView(this).apply {
-    isHorizontalScrollBarEnabled = false
-    setBackgroundColor(DesignTokens.surfaceContainerLow)
-    addView(LinearLayout(this@PhotoVideoEditorActivity).apply {
-      orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.CENTER_VERTICAL
-      setPadding(dp(DesignTokens.spaceLg), dp(DesignTokens.spaceXs), dp(DesignTokens.spaceLg), dp(DesignTokens.spaceXs))
-      addView(actionButton("✦  Auto Enhance") {
-        session.updateAdjustments { it.copy(brightness = 8f, contrast = 6f, saturation = 5f, sharpness = 8f) }
-        schedulePhotoPreviewRender()
-      }, LinearLayout.LayoutParams(WRAP, dp(44)).apply { marginEnd = dp(DesignTokens.spaceSm) })
-      val compare = actionButton("◫  Hold Compare") {}
-      compare.setOnTouchListener { _, event ->
-          when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> showOriginalPreview(true)
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> showOriginalPreview(false)
-          }
-          true
-      }
-      addView(compare, LinearLayout.LayoutParams(WRAP, dp(44)).apply { marginEnd = dp(DesignTokens.spaceSm) })
-      addView(actionButton("□  Crop 1:1") {
-        setCropMode(true, session, imageView, overlay)
-        cropAspectButtons[1f]?.performClick()
-      }, LinearLayout.LayoutParams(WRAP, dp(44)))
-    })
-  }
-
-  /** Full Studio Violet tool rail (see main_photo_editor_default_state mockup). Rotate/Flip live inside the Crop sub-bar, not as top-level tools. */
+  /** Full Studio Violet tool rail (see main_photo_editor_default_state mockup). Rotate lives inside the Crop sub-bar, not as a top-level tool. */
   private val photoToolDefinitions = listOf(
     Triple("crop", "Crop", R.drawable.ic_crop),
     Triple("adjust", "Adjust", R.drawable.ic_tune),
     Triple("filters", "Filters", R.drawable.ic_photo_filter),
-    Triple("effects", "Effects", R.drawable.ic_auto_awesome),
-    Triple("blur", "Blur", R.drawable.ic_blur_on),
     Triple("text", "Text", R.drawable.ic_title),
     Triple("stickers", "Stickers", R.drawable.ic_sentiment_satisfied),
-    Triple("shapes", "Shapes", R.drawable.ic_category),
-    Triple("draw", "Draw", R.drawable.ic_draw),
-    Triple("frames", "Frames", R.drawable.ic_wallpaper),
-    Triple("overlays", "Overlays", R.drawable.ic_filter_vintage),
-    Triple("background", "Background", R.drawable.ic_image),
+    Triple("overlay", "Overlay", R.drawable.ic_wallpaper),
     Triple("retouch", "Retouch", R.drawable.ic_face),
     Triple("layers", "Layers", R.drawable.ic_layers),
     Triple("resize", "Resize", R.drawable.ic_aspect_ratio)
@@ -482,6 +415,7 @@ class PhotoVideoEditorActivity : Activity() {
       val features = request.optJSONObject("features")
       addView(HorizontalScrollView(this@PhotoVideoEditorActivity).apply {
         isHorizontalScrollBarEnabled = false
+        photoToolScroll = this
         addView(LinearLayout(this@PhotoVideoEditorActivity).apply {
           orientation = LinearLayout.HORIZONTAL
           gravity = Gravity.CENTER_VERTICAL
@@ -503,13 +437,25 @@ class PhotoVideoEditorActivity : Activity() {
         "crop" -> cropMode
         "adjust" -> adjustMode
         "filters" -> filtersMode
-        "blur" -> blurMode
         "stickers" -> stickersMode
-        "draw" -> drawMode
         "resize" -> resizeMode
         else -> false
       }
       setToolNodeSelected(node, selected, textColor)
+      if (selected) scrollToolNodeIntoView(node)
+    }
+  }
+
+  /** Keeps the active tool-rail node fully visible, never partially clipped at the scroll edge. */
+  private fun scrollToolNodeIntoView(node: ToolNode) {
+    val scroll = photoToolScroll ?: return
+    scroll.post {
+      val left = node.root.left
+      val right = node.root.right
+      when {
+        left < scroll.scrollX -> scroll.smoothScrollTo(left, 0)
+        right > scroll.scrollX + scroll.width -> scroll.smoothScrollTo(right - scroll.width, 0)
+      }
     }
   }
 
@@ -517,12 +463,11 @@ class PhotoVideoEditorActivity : Activity() {
     when (key) {
       "crop" -> setCropMode(true, session, imageView, overlay)
       "adjust" -> setAdjustMode(true, session)
-      "filters", "effects" -> setFiltersMode(true, session)
-      "blur" -> setBlurMode(true, session, imageView)
+      "filters" -> setFiltersMode(true, session)
       "text" -> showTextInputDialog(session)
-      "stickers", "shapes", "overlays", "frames" -> setStickersMode(true, session)
-      "draw" -> setDrawMode(true, session)
-      "resize", "background" -> setResizeMode(true, session, imageView, overlay)
+      "stickers" -> setStickersMode(true, session)
+      "overlay" -> launchOverlayPicker(REQUEST_CODE_OVERLAY_UPLOAD)
+      "resize" -> setResizeMode(true, session, imageView, overlay)
       "retouch" -> setAdjustMode(true, session)
       "layers" -> openLayerManager(session)
       else -> Toast.makeText(this, "$key is coming in a later milestone.", Toast.LENGTH_SHORT).show()
@@ -574,7 +519,7 @@ class PhotoVideoEditorActivity : Activity() {
     refreshPhotoToolSelection()
   }
 
-  /** One asset card in the Stickers/Shapes library grid (see stickers_shapes_library mockup). */
+  /** One asset card in the Stickers library grid (see stickers_shapes_library mockup). */
   private fun createAssetCard(
     faceView: View,
     captionText: String?,
@@ -650,20 +595,30 @@ class PhotoVideoEditorActivity : Activity() {
               )
             }
           }
-          val shapes = listOf(ShapeKind.RECTANGLE to "Rect", ShapeKind.OVAL to "Oval", ShapeKind.LINE to "Line")
-          shapes.forEach { (kind, label) ->
-            val face = when (kind) {
-              ShapeKind.RECTANGLE -> View(this@PhotoVideoEditorActivity).apply { background = roundedDrawable(DesignTokens.primary, DesignTokens.radiusSm) }
-              ShapeKind.OVAL -> View(this@PhotoVideoEditorActivity).apply { background = circleDrawable(DesignTokens.primary) }
-              ShapeKind.LINE -> View(this@PhotoVideoEditorActivity).apply { setBackgroundColor(DesignTokens.primary) }
+          val uploadIcon = ImageView(this@PhotoVideoEditorActivity).apply {
+            setImageResource(R.drawable.ic_wallpaper)
+            setColorFilter(DesignTokens.tertiary)
+          }
+          addView(
+            createAssetCard(uploadIcon, "Upload") {
+              launchOverlayPicker(REQUEST_CODE_STICKER_UPLOAD)
+            },
+            LinearLayout.LayoutParams(WRAP, WRAP).apply { marginEnd = dp(DesignTokens.spaceSm) }
+          )
+          val features = request.optJSONObject("features")
+          if (features?.optBoolean("onlineStickers", true) != false) {
+            val browseIcon = ImageView(this@PhotoVideoEditorActivity).apply {
+              setImageResource(R.drawable.ic_photo_filter)
+              setColorFilter(DesignTokens.tertiary)
             }
-            val faceSize = if (kind == ShapeKind.LINE) FrameLayout.LayoutParams(dp(28), dp(3), Gravity.CENTER) else FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER)
             addView(
-              createAssetCard(face, label, faceSize) {
-                val layer = PhotoLayer(type = LayerType.SHAPE, shapeKind = kind)
-                session.layerStack.commit { it + layer }
-                selectLayer(layer.id)
-                setStickersMode(false, session)
+              createAssetCard(browseIcon, "Browse") {
+                OnlineStickerSheet(this@PhotoVideoEditorActivity) { path ->
+                  val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = Uri.fromFile(File(path)).toString())
+                  session.layerStack.commit { it + layer }
+                  selectLayer(layer.id)
+                  setStickersMode(false, session)
+                }.show()
               },
               LinearLayout.LayoutParams(WRAP, WRAP).apply { marginEnd = dp(DesignTokens.spaceSm) }
             )
@@ -677,103 +632,72 @@ class PhotoVideoEditorActivity : Activity() {
     }
   }
 
-  private fun setDrawMode(enabled: Boolean, session: PhotoEditSession) {
-    drawMode = enabled
-    drawOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
-    drawSubBar.visibility = if (enabled) View.VISIBLE else View.GONE
-    mainToolBar.visibility = if (enabled) View.GONE else View.VISIBLE
-    layerOverlay.visibility = if (enabled) View.GONE else View.VISIBLE
-    photoImageView.panZoomEnabled = !enabled
-    if (enabled) {
-      drawOverlay.strokeColor = Color.RED
-      drawOverlay.strokeWidthPx = dp(4).toFloat()
-      drawOverlay.setImageBounds(photoImageView.currentImageBounds())
-    } else {
-      commitDrawStrokes(session)
-      drawOverlay.clearStrokes()
+  /** Launches the SAF image picker for either the sticker-upload or overlay-upload flow, dispatched in [onActivityResult]. */
+  private fun launchOverlayPicker(requestCode: Int) {
+    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE)
+    try {
+      startActivityForResult(intent, requestCode)
+    } catch (_: Exception) {
+      Toast.makeText(this, "No app available to pick an image.", Toast.LENGTH_SHORT).show()
     }
-    refreshPhotoToolSelection()
   }
 
-  private fun commitDrawStrokes(session: PhotoEditSession) {
-    if (!drawOverlay.hasStrokes) return
-    val shortSide = minOf(photoImageView.currentImageBounds().width(), photoImageView.currentImageBounds().height())
-    if (shortSide <= 0f) return
-    val newLayers = drawOverlay.normalizedStrokes().mapNotNull { (points, stroke) ->
-      if (points.size < 2) return@mapNotNull null
-      val centerX = points.sumOf { it.first.toDouble() }.toFloat() / points.size
-      val centerY = points.sumOf { it.second.toDouble() }.toFloat() / points.size
-      val offsets = points.map { (x, y) -> (x - centerX) to (y - centerY) }
-      PhotoLayer(
-        type = LayerType.DRAWING,
-        x = centerX,
-        y = centerY,
-        drawColor = stroke.color,
-        drawStrokeWidth = stroke.widthPx / shortSide,
-        drawPoints = offsets
-      )
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    if (resultCode != Activity.RESULT_OK) return
+    val pickedUri = data?.data?.toString() ?: return
+    val path = SourceResolver.resolvePath(this, pickedUri, "pve_picked_image") ?: run {
+      Toast.makeText(this, "The selected image could not be opened.", Toast.LENGTH_SHORT).show()
+      return
     }
-    if (newLayers.isNotEmpty()) session.layerStack.commit { it + newLayers }
-    onLayerStackChanged()
-  }
-
-  /** Circular color swatch, matching the drawing_brush_studio mockup's palette dots. */
-  private fun createColorSwatch(color: Int, onClick: () -> Unit): FrameLayout {
-    val outer = FrameLayout(this).apply {
-      background = circleDrawable(DesignTokens.surfaceContainerHigh)
-      isClickable = true
-      setOnClickListener { onClick() }
-    }
-    val inner = View(this).apply { background = circleDrawable(color) }
-    outer.addView(inner, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
-    return outer
-  }
-
-  private fun createDrawSubBar(session: PhotoEditSession): LinearLayout {
-    val toolbarColor = themeColor("toolbarColor", DesignTokens.surfaceContainerLow)
-    val textColor = themeColor("textColor", DesignTokens.onSurface)
-    val primaryColor = themeColor("primaryColor", DesignTokens.primaryContainer)
-    val colors = listOf(
-      Color.RED, Color.rgb(255, 214, 51), Color.rgb(76, 217, 100),
-      Color.rgb(0, 145, 255), Color.WHITE, Color.BLACK
-    )
-    return LinearLayout(this).apply {
-      gravity = Gravity.CENTER_VERTICAL
-      setPadding(dp(12), 0, dp(12), 0)
-      setBackgroundColor(toolbarColor)
-      addView(HorizontalScrollView(this@PhotoVideoEditorActivity).apply {
-        isHorizontalScrollBarEnabled = false
-        addView(LinearLayout(this@PhotoVideoEditorActivity).apply {
-          orientation = LinearLayout.HORIZONTAL
-          gravity = Gravity.CENTER_VERTICAL
-          colors.forEach { color ->
-            addView(
-              createColorSwatch(color) { drawOverlay.strokeColor = color },
-              LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(DesignTokens.spaceSm) }
-            )
-          }
-          addView(
-            createIconButton(R.drawable.ic_line_weight, "Thin brush", textColor) { drawOverlay.strokeWidthPx = dp(2).toFloat() },
-            LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
-          )
-          addView(
-            createIconButton(R.drawable.ic_draw, "Thick brush", textColor) { drawOverlay.strokeWidthPx = dp(10).toFloat() },
-            LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
-          )
-          addView(
-            createIconButton(R.drawable.ic_undo, "Undo stroke", textColor) { drawOverlay.undoLastStroke() },
-            LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
-          )
-          addView(
-            createIconButton(R.drawable.ic_delete, "Clear drawing", textColor) { drawOverlay.clearStrokes() },
-            LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
-          )
-        })
-      }, LinearLayout.LayoutParams(0, MATCH, 1f))
-      addView(
-        actionButton("Done") { setDrawMode(false, session) }.apply { setTextColor(primaryColor) },
-        LinearLayout.LayoutParams(dp(72), MATCH)
-      )
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, bounds)
+    val aspectRatio = if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+      bounds.outWidth.toFloat() / bounds.outHeight.toFloat()
+    } else 1f
+    val resolvedUri = Uri.fromFile(File(path)).toString()
+    when (requestCode) {
+      REQUEST_CODE_STICKER_UPLOAD -> {
+        val session = photoSession ?: return
+        val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = resolvedUri)
+        session.layerStack.commit { it + layer }
+        selectLayer(layer.id)
+        setStickersMode(false, session)
+      }
+      REQUEST_CODE_OVERLAY_UPLOAD -> {
+        val session = photoSession ?: return
+        val layer = PhotoLayer(
+          type = LayerType.OVERLAY,
+          overlayUri = resolvedUri,
+          overlayAspectRatio = aspectRatio,
+          x = 0.5f,
+          y = 0.5f,
+          scale = 1f
+        )
+        session.layerStack.commit { it + layer }
+        selectLayer(layer.id)
+      }
+      REQUEST_CODE_VIDEO_STICKER_UPLOAD -> {
+        val session = videoSession ?: return
+        val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = resolvedUri)
+        session.layerStack.commit { it + layer }
+        onVideoLayerStackChanged()
+        selectVideoLayer(layer.id, session)
+      }
+      REQUEST_CODE_VIDEO_OVERLAY_UPLOAD -> {
+        val session = videoSession ?: return
+        val layer = PhotoLayer(
+          type = LayerType.OVERLAY,
+          overlayUri = resolvedUri,
+          overlayAspectRatio = aspectRatio,
+          x = 0.5f,
+          y = 0.5f,
+          scale = 1f
+        )
+        session.layerStack.commit { it + layer }
+        onVideoLayerStackChanged()
+        selectVideoLayer(layer.id, session)
+      }
     }
   }
 
@@ -792,11 +716,27 @@ class PhotoVideoEditorActivity : Activity() {
     layerToolBar.visibility = if (visible) View.VISIBLE else View.GONE
     mainToolBar.visibility = if (visible) View.GONE else View.VISIBLE
     if (visible) {
-      val isText = currentSelectedLayer()?.type == LayerType.TEXT
-      layerPropertyButtons["fontSize"]?.visibility = if (isText) View.VISIBLE else View.GONE
+      // TEXT layers show only Opacity/Colors/Duplicate/Delete; STICKER layers show only
+      // Opacity/Duplicate/Delete (no Colors either) — Scale/Rotate/Size and the
+      // lock/visibility/reorder icons don't apply to either and are hidden per each reduced list.
+      val selectedType = currentSelectedLayer()?.type
+      val isText = selectedType == LayerType.TEXT
+      val isSticker = selectedType == LayerType.STICKER
+      val reducedControls = isText || isSticker
+      layerPropertyButtons["scale"]?.visibility = if (reducedControls) View.GONE else View.VISIBLE
+      layerPropertyButtons["rotation"]?.visibility = if (reducedControls) View.GONE else View.VISIBLE
+      layerPropertyButtons["fontSize"]?.visibility = View.GONE
       layerPropertyButtons["color"]?.visibility = if (isText) View.VISIBLE else View.GONE
-      if (!isText && activeLayerPropertyKey in setOf("fontSize", "color")) {
-        activeLayerPropertyKey = "scale"
+      listOf("lock", "visibility", "front", "back").forEach { key ->
+        layerIconButtons[key]?.visibility = if (reducedControls) View.GONE else View.VISIBLE
+      }
+      val allowedKeys = when {
+        isText -> setOf("opacity", "color")
+        isSticker -> setOf("opacity")
+        else -> setOf("scale", "rotation", "opacity")
+      }
+      if (activeLayerPropertyKey !in allowedKeys) {
+        activeLayerPropertyKey = "opacity"
       }
       layerPropertySeekBar.visibility = if (activeLayerPropertyKey == "color") View.GONE else View.VISIBLE
       layerColorSwatchRow.visibility = if (activeLayerPropertyKey == "color") View.VISIBLE else View.GONE
@@ -806,6 +746,18 @@ class PhotoVideoEditorActivity : Activity() {
       layerPropertySeekBar.visibility = View.GONE
       layerColorSwatchRow.visibility = View.GONE
     }
+  }
+
+  /** Circular color swatch, matching the drawing_brush_studio mockup's palette dots. */
+  private fun createColorSwatch(color: Int, onClick: () -> Unit): FrameLayout {
+    val outer = FrameLayout(this).apply {
+      background = circleDrawable(DesignTokens.surfaceContainerHigh)
+      isClickable = true
+      setOnClickListener { onClick() }
+    }
+    val inner = View(this).apply { background = circleDrawable(color) }
+    outer.addView(inner, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+    return outer
   }
 
   /** Text color swatch row, shown when a TEXT layer's "Color" property is active (text_editor_typography_studio mockup). */
@@ -854,7 +806,7 @@ class PhotoVideoEditorActivity : Activity() {
       "rotation" -> Triple(-180f, 180f, layer.rotationDegrees)
       "opacity" -> Triple(0f, 100f, layer.opacity * 100f)
       "fontSize" -> Triple(12f, 160f, layer.fontSize)
-      else -> Triple(30f, 300f, layer.scale * 100f)
+      else -> Triple(20f, 800f, layer.scale * 100f)
     }
     layerPropertySeekBar.max = (max - min).roundToInt()
     layerPropertySeekBar.progress = (value - min).roundToInt()
@@ -867,7 +819,7 @@ class PhotoVideoEditorActivity : Activity() {
       "rotation" -> -180f
       "opacity" -> 0f
       "fontSize" -> 12f
-      else -> 30f
+      else -> 20f
     }
     val value = min + progress
     session.layerStack.updateLive { list ->
@@ -925,7 +877,7 @@ class PhotoVideoEditorActivity : Activity() {
               val id = selectedLayerId ?: return@createIconButton
               session.layerStack.commit { list -> list.map { if (it.id == id) it.copy(locked = !it.locked) else it } }
               onLayerStackChanged()
-            },
+            }.also { layerIconButtons["lock"] = it },
             LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
           )
           addView(
@@ -933,7 +885,7 @@ class PhotoVideoEditorActivity : Activity() {
               val id = selectedLayerId ?: return@createIconButton
               session.layerStack.commit { list -> list.map { if (it.id == id) it.copy(visible = !it.visible) else it } }
               onLayerStackChanged()
-            },
+            }.also { layerIconButtons["visibility"] = it },
             LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
           )
           addView(
@@ -941,7 +893,7 @@ class PhotoVideoEditorActivity : Activity() {
               val id = selectedLayerId ?: return@createIconButton
               session.layerStack.commit { list -> (list.filter { it.id != id } + list.first { it.id == id }) }
               onLayerStackChanged()
-            },
+            }.also { layerIconButtons["front"] = it },
             LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
           )
           addView(
@@ -949,7 +901,7 @@ class PhotoVideoEditorActivity : Activity() {
               val id = selectedLayerId ?: return@createIconButton
               session.layerStack.commit { list -> (listOf(list.first { it.id == id }) + list.filter { it.id != id }) }
               onLayerStackChanged()
-            },
+            }.also { layerIconButtons["back"] = it },
             LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
           )
           addView(
@@ -1033,9 +985,7 @@ class PhotoVideoEditorActivity : Activity() {
     val primaryColor = themeColor("primaryColor", DesignTokens.primaryContainer)
     val adjustmentChips = listOf(
       "brightness" to "Brightness", "contrast" to "Contrast", "saturation" to "Saturation",
-      "exposure" to "Exposure", "gamma" to "Gamma", "temperature" to "Temp", "tint" to "Tint",
-      "highlights" to "Highlights", "shadows" to "Shadows", "sharpness" to "Sharpen",
-      "blurRadius" to "Blur", "pixelSize" to "Pixelate"
+      "exposure" to "Exposure", "temperature" to "Temp", "blurRadius" to "Blur"
     )
     return LinearLayout(this).apply {
       gravity = Gravity.CENTER_VERTICAL
@@ -1063,7 +1013,7 @@ class PhotoVideoEditorActivity : Activity() {
           )
           addView(
             actionButton("Reset") {
-              session.updateAdjustments { it.copy(brightness = 0f, contrast = 0f, saturation = 0f, exposure = 0f, gamma = 0f, temperature = 0f, tint = 0f, highlights = 0f, shadows = 0f, sharpness = 0f, blurRadius = 0f, pixelSize = 0f, mirror = false) }
+              session.updateAdjustments { it.copy(brightness = 0f, contrast = 0f, saturation = 0f, exposure = 0f, temperature = 0f, blurRadius = 0f, mirror = false) }
               syncAdjustmentSeekBar(session)
               schedulePhotoPreviewRender()
               refreshAdjustSelection()
@@ -1077,19 +1027,6 @@ class PhotoVideoEditorActivity : Activity() {
         LinearLayout.LayoutParams(dp(72), MATCH)
       )
     }
-  }
-
-  /** Per-preset small preview bitmaps, lazily rendered once from the source photo — matches the mockup's live preset thumbnails rather than plain text chips. */
-  private val photoFilterThumbnailCache = mutableMapOf<String, Bitmap>()
-
-  private fun photoFilterThumbnail(session: PhotoEditSession, presetId: String): Bitmap? {
-    photoFilterThumbnailCache[presetId]?.let { return it }
-    val base = session.baseBitmap ?: return null
-    val size = dp(64)
-    val square = Bitmap.createScaledBitmap(base, size, size, true)
-    val rendered = PhotoAdjustmentRenderer.apply(square, PhotoAdjustments(filterPreset = presetId, filterStrength = 100f))
-    photoFilterThumbnailCache[presetId] = rendered
-    return rendered
   }
 
   /** Preset thumbnail card (64x64 preview + label), matching the "Preset Thumbnail Cards" component. */
@@ -1145,13 +1082,15 @@ class PhotoVideoEditorActivity : Activity() {
           }
           addView(originalCard, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginEnd = dp(DesignTokens.spaceSm) })
           PhotoFilterPresets.PRESET_IDS.forEach { id ->
-            val (card, frame, label) = createPresetCard(photoFilterThumbnail(session, id), PhotoFilterPresets.labelFor(id), textColor) {
+            val (card, frame, label) = createPresetCard(null, PhotoFilterPresets.labelFor(id), textColor) {
               session.updateAdjustments { it.copy(filterPreset = if (it.filterPreset == id) null else id) }
               activeAdjustmentKey = "filterStrength"
               syncAdjustmentSeekBar(session)
               schedulePhotoPreviewRender()
               refreshFiltersSelection(session)
             }
+            val thumbnailView = frame.getChildAt(0) as ImageView
+            filterThumbnailLoader.load(session.baseBitmap, id, dp(64)) { thumbnailView.setImageBitmap(it) }
             filterPresetCards[id] = Pair(frame, label)
             addView(card, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginEnd = dp(DesignTokens.spaceSm) })
           }
@@ -1160,87 +1099,6 @@ class PhotoVideoEditorActivity : Activity() {
       }, LinearLayout.LayoutParams(0, MATCH, 1f))
       addView(
         actionButton("Done") { setFiltersMode(false, session) }.apply { setTextColor(primaryColor) },
-        LinearLayout.LayoutParams(dp(72), MATCH)
-      )
-    }
-  }
-
-  /** Blur & Depth (blur_depth_editor mockup) — synthetic tilt-shift/radial focus blur. See [PhotoDepthBlur] for why "Portrait" (ML) mode is out of scope. */
-  private fun setBlurMode(enabled: Boolean, session: PhotoEditSession, imageView: ZoomableImageView) {
-    blurMode = enabled
-    blurSubBar.visibility = if (enabled) View.VISIBLE else View.GONE
-    blurSeekBar.visibility = if (enabled && session.depthBlur.mode != null) View.VISIBLE else View.GONE
-    mainToolBar.visibility = if (enabled) View.GONE else View.VISIBLE
-    layerOverlay.visibility = if (enabled) View.GONE else View.VISIBLE
-    if (enabled) syncBlurSeekBar(session)
-    refreshPhotoToolSelection()
-    refreshBlurSelection(session)
-  }
-
-  private fun blurValue(blur: PhotoDepthBlur, key: String): Float = when (key) {
-    "intensity" -> blur.intensity
-    "feather" -> blur.feather * 100f
-    "size" -> if (blur.mode == PhotoDepthBlur.Mode.LINEAR) blur.bandWidth * 100f else blur.radius * 100f
-    else -> 0f
-  }
-
-  private fun withBlurValue(blur: PhotoDepthBlur, key: String, value: Float): PhotoDepthBlur = when (key) {
-    "intensity" -> blur.copy(intensity = value)
-    "feather" -> blur.copy(feather = (value / 100f).coerceIn(0.01f, 1f))
-    "size" -> if (blur.mode == PhotoDepthBlur.Mode.LINEAR) blur.copy(bandWidth = (value / 100f).coerceIn(0.01f, 1f)) else blur.copy(radius = (value / 100f).coerceIn(0.01f, 1f))
-    else -> blur
-  }
-
-  private fun syncBlurSeekBar(session: PhotoEditSession) {
-    blurSeekBar.max = 100
-    blurSeekBar.progress = blurValue(session.depthBlur, activeBlurKey).roundToInt().coerceIn(0, 100)
-  }
-
-  private fun refreshBlurSelection(session: PhotoEditSession) {
-    val textColor = themeColor("textColor", DesignTokens.onSurface)
-    val primaryColor = themeColor("primaryColor", DesignTokens.primaryContainer)
-    refreshSelection(blurModeButtons, session.depthBlur.mode, textColor, primaryColor)
-    refreshSelection(blurKeyButtons, activeBlurKey, textColor, primaryColor)
-  }
-
-  private fun createBlurSubBar(session: PhotoEditSession, imageView: ZoomableImageView): LinearLayout {
-    val toolbarColor = themeColor("toolbarColor", DesignTokens.surfaceContainerLow)
-    val textColor = themeColor("textColor", DesignTokens.onSurface)
-    val primaryColor = themeColor("primaryColor", DesignTokens.primaryContainer)
-    val modes = listOf<Pair<PhotoDepthBlur.Mode?, String>>(null to "Off", PhotoDepthBlur.Mode.RADIAL to "Radial", PhotoDepthBlur.Mode.LINEAR to "Linear")
-    val keys = listOf("size" to "Size", "feather" to "Feather", "intensity" to "Intensity")
-    return LinearLayout(this).apply {
-      gravity = Gravity.CENTER_VERTICAL
-      setPadding(dp(12), 0, dp(12), 0)
-      setBackgroundColor(toolbarColor)
-      addView(HorizontalScrollView(this@PhotoVideoEditorActivity).apply {
-        isHorizontalScrollBarEnabled = false
-        addView(LinearLayout(this@PhotoVideoEditorActivity).apply {
-          orientation = LinearLayout.HORIZONTAL
-          modes.forEach { (mode, label) ->
-            val chip = actionButton(label) {
-              session.updateDepthBlur { it.copy(mode = mode) }
-              schedulePhotoPreviewRender()
-              blurSeekBar.visibility = if (mode != null) View.VISIBLE else View.GONE
-              if (mode != null) syncBlurSeekBar(session)
-              refreshBlurSelection(session)
-            }.apply { setTextColor(textColor) }
-            blurModeButtons[mode] = chip
-            addView(chip, LinearLayout.LayoutParams(dp(72), MATCH))
-          }
-          keys.forEach { (key, label) ->
-            val chip = actionButton(label) {
-              activeBlurKey = key
-              syncBlurSeekBar(session)
-              refreshBlurSelection(session)
-            }.apply { setTextColor(textColor) }
-            blurKeyButtons[key] = chip
-            addView(chip, LinearLayout.LayoutParams(dp(80), MATCH))
-          }
-        })
-      }, LinearLayout.LayoutParams(0, MATCH, 1f))
-      addView(
-        actionButton("Done") { setBlurMode(false, session, imageView) }.apply { setTextColor(primaryColor) },
         LinearLayout.LayoutParams(dp(72), MATCH)
       )
     }
@@ -1302,13 +1160,6 @@ class PhotoVideoEditorActivity : Activity() {
             session.update { it.rotatedRight() }
             schedulePhotoPreviewRender()
             imageView.post { imageView.resetToFit(); overlay.setImageBounds(imageView.currentImageBounds(), resetCrop = true) }
-          },
-          LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
-        )
-        addView(
-          createIconButton(R.drawable.ic_flip, "Flip", textColor) {
-            session.update { it.cycledFlip() }
-            schedulePhotoPreviewRender()
           },
           LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
         )
@@ -1415,11 +1266,9 @@ class PhotoVideoEditorActivity : Activity() {
       finishWithError("Nothing to export.", "E_INTERNAL")
       return
     }
-    if (drawMode) commitDrawStrokes(session)
     exportProgressView.visibility = View.VISIBLE
     val state = session.state
     val adjustments = session.adjustments
-    val depthBlur = session.depthBlur
     val layers = session.layerStack.layers
     // A chosen Resize/social preset overrides the consumer's own maxWidth/maxHeight, since the
     // user explicitly picked an exact output size (matching the crop aspect ratio set alongside it).
@@ -1428,7 +1277,7 @@ class PhotoVideoEditorActivity : Activity() {
     }
     Thread {
       try {
-        val result = PhotoExporter.export(applicationContext, sourceUri, state, adjustments, depthBlur, layers, exportOptions)
+        val result = PhotoExporter.export(applicationContext, sourceUri, state, adjustments, layers, exportOptions)
         runOnUiThread {
           val intent = Intent()
             .putExtra(EXTRA_URI, result.uri)
@@ -1515,13 +1364,15 @@ class PhotoVideoEditorActivity : Activity() {
     videoLayerOverlay = layerOverlay
     preview.addView(layerOverlay, FrameLayout.LayoutParams(MATCH, MATCH))
     layerOverlay.onLayerTapped = { id -> selectVideoLayer(id, session) }
-    layerOverlay.onLayerDragged = { id, x, y ->
+    layerOverlay.onLayerTransformChanged = { id, x, y, scale, rotation ->
       if (videoDragStartSnapshot == null) videoDragStartSnapshot = session.layerStack.layers
-      session.layerStack.updateLive { list -> list.map { if (it.id == id) it.copy(x = x, y = y) else it } }
+      session.layerStack.updateLive { list ->
+        list.map { if (it.id == id) it.copy(x = x, y = y, scale = scale, rotationDegrees = rotation) else it }
+      }
       videoLayerOverlay.layers = session.layerStack.layers
       refreshVideoOverlayPreview(session)
     }
-    layerOverlay.onLayerDragEnded = {
+    layerOverlay.onLayerTransformEnded = {
       videoDragStartSnapshot?.let { session.layerStack.commitSnapshot(it) }
       videoDragStartSnapshot = null
       onVideoLayerStackChanged()
@@ -1593,10 +1444,19 @@ class PhotoVideoEditorActivity : Activity() {
 
     session.onClipsReady = {
       runOnUiThread {
+        if (isFinishing || isDestroyed) return@runOnUiThread
         selectedClipIndex = 0
         updateTimeLabel()
         bindTrimViewToSelectedClip(session)
         refreshClipStrip(session)
+      }
+    }
+    session.onPlaybackError = { message ->
+      runOnUiThread {
+        if (!isFinishing && !isDestroyed) {
+          Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+          finishWithError(message, "E_VIDEO_PLAYBACK_FAILED")
+        }
       }
     }
 
@@ -1702,18 +1562,31 @@ class PhotoVideoEditorActivity : Activity() {
       return
     }
     val videoSize = session.player.videoSize
-    val width = videoSize.width.takeIf { it > 0 } ?: 1280
-    val height = videoSize.height.takeIf { it > 0 } ?: 720
+    val sourceWidth = videoSize.width.takeIf { it > 0 } ?: 1280
+    val sourceHeight = videoSize.height.takeIf { it > 0 } ?: 720
+    val previewScale = minOf(1f, 1280f / maxOf(sourceWidth, sourceHeight))
+    val width = (sourceWidth * previewScale).roundToInt().coerceAtLeast(2)
+    val height = (sourceHeight * previewScale).roundToInt().coerceAtLeast(2)
     val renderKey = "${session.layerStack.revision}:$width:$height:${activeLayers.joinToString { it.id }}"
     if (renderKey == videoOverlayRenderKey) return
     val transparent = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    val rendered = PhotoLayerRenderer.render(transparent, activeLayers, ::resolveVideoSticker)
+    val rendered = PhotoLayerRenderer.render(transparent, activeLayers, ::resolveVideoImageUri)
     transparent.recycle()
     val previous = videoOverlayBitmap
     videoOverlayBitmap = rendered
     videoOverlayRenderKey = renderKey
     videoOverlayImageView.setImageBitmap(rendered)
     previous?.takeIf { it !== rendered && !it.isRecycled }?.recycle()
+  }
+
+  /** Resolves a sticker-uri or overlay-uri layer's image URI for the video overlay preview, caching by URI. */
+  private fun resolveVideoImageUri(uri: String): Bitmap? {
+    videoImageLayerCache[uri]?.let { return it }
+    if (videoImageLayerCache.containsKey(uri)) return null
+    val path = SourceResolver.resolvePath(this, uri, "pve_video_layer_image")
+    val bitmap = path?.let { BitmapFactory.decodeFile(it) }
+    videoImageLayerCache[uri] = bitmap
+    return bitmap
   }
 
   /** Where the video actually renders within [view] under `FIT_CENTER`-style letterboxing (mirrors `ZoomableImageView.resetToFit`'s math). */
@@ -1730,12 +1603,6 @@ class PhotoVideoEditorActivity : Activity() {
     val left = (viewWidth - fittedWidth) / 2f
     val top = (viewHeight - fittedHeight) / 2f
     return android.graphics.RectF(left, top, left + fittedWidth, top + fittedHeight)
-  }
-
-  private fun resolveVideoSticker(uri: String): Bitmap? {
-    if (videoStickerCache.containsKey(uri)) return videoStickerCache[uri]
-    val path = SourceResolver.resolvePath(this, uri, "pve_video_sticker") ?: return null
-    return BitmapFactory.decodeFile(path).also { videoStickerCache[uri] = it }
   }
 
   /** Mirrors [onLayerStackChanged] for the video overlay stack (Milestone 6). */
@@ -1776,7 +1643,7 @@ class PhotoVideoEditorActivity : Activity() {
       "opacity" -> Triple(0f, 100f, layer.opacity * 100f)
       "start" -> Triple(0f, session.durationMs.toFloat(), layer.startMs.toFloat())
       "end" -> Triple(0f, session.durationMs.toFloat(), session.durationMs.effectiveEndOr(layer.endMs).toFloat())
-      else -> Triple(30f, 300f, layer.scale * 100f)
+      else -> Triple(20f, 800f, layer.scale * 100f)
     }
     videoLayerPropertySeekBar.max = (max - min).roundToInt()
     videoLayerPropertySeekBar.progress = (value - min).roundToInt()
@@ -1789,7 +1656,7 @@ class PhotoVideoEditorActivity : Activity() {
     val min = when (activeVideoLayerPropertyKey) {
       "rotation" -> -180f
       "opacity", "start", "end" -> 0f
-      else -> 30f
+      else -> 20f
     }
     val value = min + progress
     session.layerStack.updateLive { list ->
@@ -1857,29 +1724,13 @@ class PhotoVideoEditorActivity : Activity() {
       .setPositiveButton("Add") { _, _ ->
         val text = input.text?.toString().orEmpty()
         if (text.isNotBlank()) {
-          session.layerStack.commit { it + PhotoLayer(type = LayerType.TEXT, text = text) }
+          val layer = PhotoLayer(type = LayerType.TEXT, text = text)
+          session.layerStack.commit { it + layer }
           onVideoLayerStackChanged()
+          selectVideoLayer(layer.id, session)
         }
       }
       .setNegativeButton("Cancel", null)
-      .show()
-  }
-
-  private fun showVideoStickerPicker(session: VideoEditSession) {
-    val builtin = PhotoLayerRenderer.builtinStickerIds()
-    val shapes = listOf(ShapeKind.RECTANGLE to "▭ Rectangle", ShapeKind.OVAL to "◯ Oval", ShapeKind.LINE to "▬ Line")
-    val labels = (builtin.map { PhotoLayerRenderer.glyphFor(it) } + shapes.map { it.second }).toTypedArray()
-    AlertDialog.Builder(this)
-      .setTitle("Add sticker or shape")
-      .setItems(labels) { _, index ->
-        val layer = if (index < builtin.size) {
-          PhotoLayer(type = LayerType.STICKER, stickerId = builtin[index])
-        } else {
-          PhotoLayer(type = LayerType.SHAPE, shapeKind = shapes[index - builtin.size].first)
-        }
-        session.layerStack.commit { it + layer }
-        onVideoLayerStackChanged()
-      }
       .show()
   }
 
@@ -1897,13 +1748,13 @@ class PhotoVideoEditorActivity : Activity() {
 
       val features = request.optJSONObject("features")
       val tools = listOf(
-        Triple("mute", "Mute", R.drawable.ic_volume_off),
         Triple("cover", "Cover", R.drawable.ic_movie),
         Triple("speed", "Speed 1x", R.drawable.ic_speed),
         Triple("crop", "Crop", R.drawable.ic_crop),
         Triple("filters", "Filters", R.drawable.ic_photo_filter),
         Triple("text", "Text", R.drawable.ic_title),
-        Triple("stickers", "Stickers", R.drawable.ic_sentiment_satisfied)
+        Triple("stickers", "Stickers", R.drawable.ic_sentiment_satisfied),
+        Triple("overlay", "Overlay", R.drawable.ic_wallpaper)
       )
       addView(HorizontalScrollView(this@PhotoVideoEditorActivity).apply {
         isHorizontalScrollBarEnabled = false
@@ -1925,7 +1776,6 @@ class PhotoVideoEditorActivity : Activity() {
     val textColor = themeColor("textColor", DesignTokens.onSurface)
     videoToolButtons.forEach { (key, node) ->
       val selected = when (key) {
-        "mute" -> session.state.muted
         "crop" -> videoAspectMode
         "filters" -> videoFiltersMode
         else -> false
@@ -1936,11 +1786,6 @@ class PhotoVideoEditorActivity : Activity() {
 
   private fun onVideoToolTapped(key: String, session: VideoEditSession, playerView: PlayerView) {
     when (key) {
-      "mute" -> {
-        session.update { it.toggledMute() }
-        session.player.volume = if (session.state.muted) 0f else 1f
-        refreshVideoToolSelection(session)
-      }
       "cover" -> {
         val globalMs = session.globalPositionMs()
         session.update { it.withCoverFrame(globalMs) }
@@ -1950,10 +1795,6 @@ class PhotoVideoEditorActivity : Activity() {
         session.update { it.rotatedRight() }
         playerView.rotation = session.state.rotationDegrees.toFloat()
       }
-      "flip" -> {
-        session.update { it.toggledFlip() }
-        playerView.scaleX = if (session.state.flipHorizontal) -1f else 1f
-      }
       "crop" -> setVideoAspectMode(true, session)
       "speed" -> {
         session.update { it.cycledSpeed() }
@@ -1962,9 +1803,52 @@ class PhotoVideoEditorActivity : Activity() {
       }
       "text" -> showVideoTextInputDialog(session)
       "stickers" -> showVideoStickerPicker(session)
+      "overlay" -> launchOverlayPicker(REQUEST_CODE_VIDEO_OVERLAY_UPLOAD)
       "filters" -> setVideoFiltersMode(true, session)
       else -> Toast.makeText(this, "$key is coming in a later milestone.", Toast.LENGTH_SHORT).show()
     }
+  }
+
+  private fun showVideoStickerPicker(session: VideoEditSession) {
+    val consumerAssets = request.optJSONArray("stickerAssets")
+    val builtin = PhotoLayerRenderer.builtinStickerIds()
+    val consumerCount = consumerAssets?.length() ?: 0
+    val features = request.optJSONObject("features")
+    val onlineStickersEnabled = features?.optBoolean("onlineStickers", true) != false
+    val labels = (
+      builtin.map { PhotoLayerRenderer.glyphFor(it) } +
+        (0 until consumerCount).map { i -> consumerAssets?.optJSONObject(i)?.optString("id", "asset$i") ?: "asset$i" } +
+        listOf("Upload from device") +
+        (if (onlineStickersEnabled) listOf("Browse online") else emptyList())
+      ).toTypedArray()
+    AlertDialog.Builder(this)
+      .setTitle("Add sticker")
+      .setItems(labels) { _, index ->
+        when {
+          index < builtin.size -> {
+            val layer = PhotoLayer(type = LayerType.STICKER, stickerId = builtin[index])
+            session.layerStack.commit { it + layer }
+            onVideoLayerStackChanged()
+            selectVideoLayer(layer.id, session)
+          }
+          index < builtin.size + consumerCount -> {
+            val asset = consumerAssets?.optJSONObject(index - builtin.size)
+            val uri = asset?.optString("uri").takeUnless { it.isNullOrBlank() } ?: return@setItems
+            val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = uri)
+            session.layerStack.commit { it + layer }
+            onVideoLayerStackChanged()
+            selectVideoLayer(layer.id, session)
+          }
+          index == builtin.size + consumerCount -> launchOverlayPicker(REQUEST_CODE_VIDEO_STICKER_UPLOAD)
+          else -> OnlineStickerSheet(this) { path ->
+            val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = Uri.fromFile(File(path)).toString())
+            session.layerStack.commit { it + layer }
+            onVideoLayerStackChanged()
+            selectVideoLayer(layer.id, session)
+          }.show()
+        }
+      }
+      .show()
   }
 
   private fun formatSpeedLabel(speed: Float): String {
@@ -1991,7 +1875,7 @@ class PhotoVideoEditorActivity : Activity() {
       orientation = LinearLayout.VERTICAL
       setBackgroundColor(toolbarColor)
 
-      // Rotate/Flip row — mirrors the photo Crop sub-bar's treatment.
+      // Rotate row — mirrors the photo Crop sub-bar's treatment.
       addView(LinearLayout(this@PhotoVideoEditorActivity).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
@@ -1999,13 +1883,6 @@ class PhotoVideoEditorActivity : Activity() {
           createIconButton(R.drawable.ic_rotate_right, "Rotate right", textColor) {
             session.update { it.rotatedRight() }
             playerView.rotation = session.state.rotationDegrees.toFloat()
-          },
-          LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
-        )
-        addView(
-          createIconButton(R.drawable.ic_flip, "Flip horizontal", textColor) {
-            session.update { it.toggledFlip() }
-            playerView.scaleX = if (session.state.flipHorizontal) -1f else 1f
           },
           LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin))
         )
@@ -2099,7 +1976,8 @@ class PhotoVideoEditorActivity : Activity() {
     videoExportProgressView.visibility = View.VISIBLE
     val exporter = VideoExporter(applicationContext)
     videoExporter = exporter
-    exporter.export(
+    try {
+      exporter.export(
       clips = session.clips,
       state = session.state,
       layers = session.layerStack.layers,
@@ -2107,6 +1985,8 @@ class PhotoVideoEditorActivity : Activity() {
       onProgress = { /* Progress UI is a spinner for now; see docs/video-editor.md. */ },
       onComplete = { result ->
         runOnUiThread {
+          videoExporter = null
+          videoExportProgressView.visibility = View.GONE
           val intent = Intent()
             .putExtra(EXTRA_URI, result.uri)
             .putExtra(EXTRA_TYPE, mediaType)
@@ -2120,9 +2000,18 @@ class PhotoVideoEditorActivity : Activity() {
         }
       },
       onError = { error ->
-        runOnUiThread { finishWithError(error.message ?: "Unable to export the video.", error.code) }
+        runOnUiThread {
+          videoExporter = null
+          videoExportProgressView.visibility = View.GONE
+          Toast.makeText(this, error.message ?: "Unable to export the video.", Toast.LENGTH_LONG).show()
+        }
       }
-    )
+      )
+    } catch (error: Exception) {
+      videoExporter = null
+      videoExportProgressView.visibility = View.GONE
+      Toast.makeText(this, error.message ?: "Unable to export the video.", Toast.LENGTH_LONG).show()
+    }
   }
 
   private fun cancelVideoExport() {
@@ -2144,21 +2033,38 @@ class PhotoVideoEditorActivity : Activity() {
       clip.trimStartMs.toFloat() / duration,
       clip.effectiveTrimEndMs().toFloat() / duration
     )
-    val cached = clipThumbnailCache[clip.id]
-    if (cached != null) {
-      trimRangeView.thumbnails = cached
-      return
-    }
+    timelineThumbnailRequest?.cancel()
     trimRangeView.thumbnails = emptyList()
-    Thread {
-      val thumbnails = VideoThumbnailGenerator.generate(applicationContext, clip.sourceUri, clip.originalDurationMs)
-      clipThumbnailCache[clip.id] = thumbnails
-      runOnUiThread {
-        if (session.clips.getOrNull(selectedClipIndex)?.id == clip.id) {
-          trimRangeView.thumbnails = thumbnails
+    val frames = arrayOfNulls<Bitmap>(TIMELINE_THUMBNAIL_COUNT)
+    val thumbnailRepository = timelineThumbnailRepository
+      ?: TimelineThumbnailRepository(applicationContext).also { timelineThumbnailRepository = it }
+    timelineThumbnailRequest = thumbnailRepository.load(
+      mediaId = clip.sourceUri,
+      uri = clip.sourceUri.toMediaUri(),
+      durationMs = clip.originalDurationMs,
+      count = TIMELINE_THUMBNAIL_COUNT,
+      width = dp(72),
+      height = dp(48),
+      onThumbnail = { index, bitmap ->
+        runOnUiThread {
+          if (!isFinishing && session.clips.getOrNull(selectedClipIndex)?.id == clip.id) {
+            frames[index] = bitmap
+            trimRangeView.thumbnails = frames.filterNotNull()
+          }
+        }
+      },
+      onComplete = {
+        runOnUiThread {
+          if (session.clips.getOrNull(selectedClipIndex)?.id == clip.id) {
+            timelineThumbnailRequest = null
+          }
         }
       }
-    }.start()
+    )
+  }
+
+  private fun String.toMediaUri(): Uri = Uri.parse(this).let { parsed ->
+    if (parsed.scheme == null) Uri.fromFile(File(this)) else parsed
   }
 
   /** Rebuilds the clip strip: one chip per clip plus Split/Duplicate/Delete/Move-Left/Move-Right actions. */
@@ -2353,24 +2259,10 @@ class PhotoVideoEditorActivity : Activity() {
       }
 
       addView(
-        LinearLayout(this@PhotoVideoEditorActivity).apply {
-          gravity = Gravity.CENTER
-          background = roundedDrawable(primaryColor, DesignTokens.radiusLg)
-          setPadding(dp(DesignTokens.spaceMd), 0, dp(DesignTokens.spaceLg), 0)
-          isClickable = true
-          setOnClickListener { if (mediaType == "photo") showPhotoExportConfiguration() else finishDone() }
-          addView(ImageView(this@PhotoVideoEditorActivity).apply {
-            setImageResource(R.drawable.ic_share)
-            setColorFilter(onPrimaryColor)
-          }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(DesignTokens.spaceXs) })
-          addView(TextView(this@PhotoVideoEditorActivity).apply {
-            text = "Export"
-            setTextColor(onPrimaryColor)
-            textSize = 13f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-          })
+        editorPrimaryButton(this@PhotoVideoEditorActivity, "Export", R.drawable.ic_share, primaryColor, onPrimaryColor) {
+          if (mediaType == "photo") showPhotoExportConfiguration() else finishDone()
         },
-        LinearLayout.LayoutParams(WRAP, dp(40)).apply { marginStart = dp(DesignTokens.spaceXs) }
+        LinearLayout.LayoutParams(WRAP, dp(DesignTokens.touchTargetMin)).apply { marginStart = dp(DesignTokens.spaceXs) }
       )
     }
   }
@@ -2410,6 +2302,7 @@ class PhotoVideoEditorActivity : Activity() {
       setColorFilter(tint)
       setPadding(dp(11), dp(11), dp(11), dp(11))
       setOnClickListener { onClick() }
+      applyPressScale()
     }
   }
 
@@ -2441,15 +2334,10 @@ class PhotoVideoEditorActivity : Activity() {
     if (selectedLayerId == null && layerToolBar.visibility == View.VISIBLE) setLayerToolBarVisible(false)
   }
 
-  /** Coalesces rapid slider/drag events to at most one expensive bitmap render per display frame. */
+  /** Delegates expensive rendering to a coalescing background feature component. */
   private fun schedulePhotoPreviewRender() {
-    if (photoPreviewRenderPending || !::photoImageView.isInitialized) return
-    photoPreviewRenderPending = true
-    photoImageView.postOnAnimation {
-      photoPreviewRenderPending = false
-      val session = photoSession ?: return@postOnAnimation
-      if (!isFinishing && !isDestroyed) photoImageView.setImageBitmap(session.renderPreview())
-    }
+    if (!::photoImageView.isInitialized) return
+    photoPreviewRenderer?.request()
   }
 
   private fun actionButton(label: String, action: () -> Unit) = Button(this).apply {
@@ -2507,6 +2395,7 @@ class PhotoVideoEditorActivity : Activity() {
       addView(tile, LinearLayout.LayoutParams(dp(DesignTokens.touchTargetMin), dp(DesignTokens.touchTargetMin)))
       addView(label, LinearLayout.LayoutParams(WRAP, WRAP))
       setOnClickListener { onClick() }
+      applyPressScale()
     }
     return ToolNode(root, tile, icon, label)
   }
@@ -2573,15 +2462,28 @@ class PhotoVideoEditorActivity : Activity() {
   @Deprecated("Deprecated in Java")
   override fun onBackPressed() = confirmDiscardChanges()
 
+  override fun onTrimMemory(level: Int) {
+    super.onTrimMemory(level)
+    if (level >= TRIM_MEMORY_RUNNING_LOW) timelineThumbnailRepository?.clearMemory()
+  }
+
   override fun onDestroy() {
     positionPollRunnable?.let { positionPollHandler.removeCallbacks(it) }
-    photoPreviewRenderPending = false
     if (::photoImageView.isInitialized) photoImageView.setImageDrawable(null)
-    photoSession?.release()
+    filterThumbnailLoader.close()
+    timelineThumbnailRequest?.cancel()
+    timelineThumbnailRequest = null
+    if (::trimRangeView.isInitialized) trimRangeView.thumbnails = emptyList()
+    timelineThumbnailRepository?.close()
+    timelineThumbnailRepository = null
+    val sessionToRelease = photoSession
+    photoSession = null
+    photoPreviewRenderer?.close { sessionToRelease?.release() }
+    photoPreviewRenderer = null
     videoOverlayBitmap?.takeIf { !it.isRecycled }?.recycle()
     videoOverlayBitmap = null
-    videoStickerCache.values.filterNotNull().distinct().forEach { if (!it.isRecycled) it.recycle() }
-    videoStickerCache.clear()
+    videoImageLayerCache.values.filterNotNull().distinct().forEach { if (!it.isRecycled) it.recycle() }
+    videoImageLayerCache.clear()
     videoExporter?.cancel()
     videoSession?.release()
     super.onDestroy()
@@ -2590,13 +2492,14 @@ class PhotoVideoEditorActivity : Activity() {
   private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
   companion object {
-    /** Rotate/flip icon row (44dp) + aspect-preset chip row (56dp). */
+    /** Rotate icon row (44dp) + aspect-preset chip row (56dp). */
     const val CROP_SUB_BAR_HEIGHT_DP = 148
     const val ADJUST_SUB_BAR_HEIGHT_DP = 112
     /** 64dp preset thumbnail + label + vertical padding, matching the "Preset Thumbnail Cards" spec. */
     const val FILTERS_SUB_BAR_HEIGHT_DP = 104
     /** 64dp asset card + optional caption + vertical padding, for the Stickers/Shapes grid. */
     const val ASSET_GRID_BAR_HEIGHT_DP = 104
+    private const val TIMELINE_THUMBNAIL_COUNT = 12
     const val EXTRA_URI = "photoVideoEditor.uri"
     const val EXTRA_TYPE = "photoVideoEditor.type"
     const val EXTRA_MIME_TYPE = "photoVideoEditor.mimeType"
@@ -2610,5 +2513,9 @@ class PhotoVideoEditorActivity : Activity() {
     const val RESULT_ERROR = Activity.RESULT_FIRST_USER
     private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+    private const val REQUEST_CODE_STICKER_UPLOAD = 9001
+    private const val REQUEST_CODE_OVERLAY_UPLOAD = 9002
+    private const val REQUEST_CODE_VIDEO_STICKER_UPLOAD = 9003
+    private const val REQUEST_CODE_VIDEO_OVERLAY_UPLOAD = 9004
   }
 }

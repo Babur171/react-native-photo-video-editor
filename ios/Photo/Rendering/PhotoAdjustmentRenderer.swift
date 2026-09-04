@@ -6,32 +6,22 @@ import UIKit
 /// formulas mirror `PhotoAdjustmentRenderer.kt` so Android/iOS output stays
 /// visually close:
 ///
-/// color adjustments (brightness/contrast/saturation/exposure/temperature/tint)
-/// -> tone curve (gamma/highlights/shadows) -> sharpen -> blur -> pixelate ->
-/// mirror -> preset filter blend.
+/// color adjustments (brightness/contrast/saturation/exposure/temperature)
+/// -> blur -> mirror -> preset filter blend.
 enum PhotoAdjustmentRenderer {
   static func apply(_ source: UIImage, adjustments: PhotoAdjustments) -> UIImage {
     guard !adjustments.isIdentity, var buffer = PixelBuffer(image: source) else { return source }
 
     let needsColorPass = adjustments.brightness != 0 || adjustments.contrast != 0 || adjustments.saturation != 0 ||
-      adjustments.exposure != 0 || adjustments.temperature != 0 || adjustments.tint != 0
+      adjustments.exposure != 0 || adjustments.temperature != 0
     if needsColorPass {
       applyColorAdjustments(&buffer, adjustments)
-    }
-    if adjustments.gamma != 0 || adjustments.highlights != 0 || adjustments.shadows != 0 {
-      applyToneCurve(&buffer, adjustments)
-    }
-    if adjustments.sharpness > 0 {
-      applySharpen(&buffer, amount: adjustments.sharpness / 100)
     }
     if adjustments.blurRadius >= 1 {
       applyBoxBlur(&buffer, radius: Int(adjustments.blurRadius.rounded()))
     }
 
     var image = buffer.makeImage() ?? source
-    if adjustments.pixelSize >= 2 {
-      image = applyPixelate(image, blockSize: Int(adjustments.pixelSize.rounded()))
-    }
     if adjustments.mirror {
       image = applyMirror(image)
     }
@@ -48,7 +38,6 @@ enum PhotoAdjustmentRenderer {
     let contrastTranslate = 128 * (1 - contrastScale)
     let saturationFactor = (adjustments.saturation + 100) / 100
     let tempShift = adjustments.temperature / 100 * 40
-    let tintShift = adjustments.tint / 100 * 40
 
     for y in 0..<buffer.height {
       for x in 0..<buffer.width {
@@ -64,50 +53,8 @@ enum PhotoAdjustmentRenderer {
         g = luminance + (g - luminance) * saturationFactor
         b = luminance + (b - luminance) * saturationFactor
         r += tempShift
-        g += tintShift
         b -= tempShift
         buffer[x, y] = (clampByte(r), clampByte(g), clampByte(b), pixel.a)
-      }
-    }
-  }
-
-  private static func applyToneCurve(_ buffer: inout PixelBuffer, _ adjustments: PhotoAdjustments) {
-    let gammaExponent = 1 / max(0.1, 1 + adjustments.gamma / 100)
-    var lut = [UInt8](repeating: 0, count: 256)
-    for i in 0..<256 {
-      var v = pow(Double(i) / 255, gammaExponent)
-      let shadowWeight = pow(1 - v, 2)
-      v += adjustments.shadows / 100 * 0.3 * shadowWeight
-      let highlightWeight = pow(v, 2)
-      v += adjustments.highlights / 100 * 0.3 * highlightWeight
-      lut[i] = UInt8((min(max(v, 0), 1) * 255).rounded())
-    }
-    for y in 0..<buffer.height {
-      for x in 0..<buffer.width {
-        let pixel = buffer[x, y]
-        buffer[x, y] = (lut[Int(pixel.r)], lut[Int(pixel.g)], lut[Int(pixel.b)], pixel.a)
-      }
-    }
-  }
-
-  private static func applySharpen(_ buffer: inout PixelBuffer, amount: Double) {
-    guard buffer.width >= 3, buffer.height >= 3 else { return }
-    let source = buffer
-    let center = 1 + 4 * amount
-    let edge = -amount
-    for y in 1..<(buffer.height - 1) {
-      for x in 1..<(buffer.width - 1) {
-        let neighbors: [(Int, Int, Double)] = [(x, y, center), (x - 1, y, edge), (x + 1, y, edge), (x, y - 1, edge), (x, y + 1, edge)]
-        var r = 0.0
-        var g = 0.0
-        var b = 0.0
-        for (nx, ny, weight) in neighbors {
-          let p = source[nx, ny]
-          r += Double(p.r) * weight
-          g += Double(p.g) * weight
-          b += Double(p.b) * weight
-        }
-        buffer[x, y] = (clampByte(r), clampByte(g), clampByte(b), source[x, y].a)
       }
     }
   }
@@ -142,24 +89,6 @@ enum PhotoAdjustmentRenderer {
         let (ox, oy) = horizontal ? (inner, outer) : (outer, inner)
         buffer[ox, oy] = (UInt8(r / count), UInt8(g / count), UInt8(b / count), UInt8(a / count))
       }
-    }
-  }
-
-  private static func applyPixelate(_ image: UIImage, blockSize: Int) -> UIImage {
-    let safeBlock = max(2, blockSize)
-    let smallSize = CGSize(
-      width: max(1, (image.size.width / CGFloat(safeBlock)).rounded(.down)),
-      height: max(1, (image.size.height / CGFloat(safeBlock)).rounded(.down))
-    )
-    let smallRenderer = PhotoEditSession.pixelRenderer(size: smallSize)
-    let small = smallRenderer.image { context in
-      context.cgContext.interpolationQuality = .none
-      image.draw(in: CGRect(origin: .zero, size: smallSize))
-    }
-    let bigRenderer = PhotoEditSession.pixelRenderer(size: image.size)
-    return bigRenderer.image { context in
-      context.cgContext.interpolationQuality = .none
-      small.draw(in: CGRect(origin: .zero, size: image.size))
     }
   }
 

@@ -47,7 +47,7 @@ test('normalizes and forwards a valid photo request', async () => {
     cancelled: false,
   });
   expect(JSON.parse(mockNativeOpenEditor.mock.calls[0]![0])).toMatchObject({
-    features: { crop: true, trim: false, mute: false },
+    features: { crop: true, trim: false },
     export: { quality: 'high', preserveMetadata: true },
     saveToGallery: false,
   });

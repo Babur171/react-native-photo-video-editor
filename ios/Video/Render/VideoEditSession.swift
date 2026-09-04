@@ -86,7 +86,6 @@ final class VideoEditSession {
     }
     let item = AVPlayerItem(asset: composition)
     player.replaceCurrentItem(with: item)
-    player.volume = state.muted ? 0 : 1
   }
 
   func release() {

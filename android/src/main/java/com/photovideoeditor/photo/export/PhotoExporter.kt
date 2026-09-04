@@ -10,8 +10,6 @@ import androidx.exifinterface.media.ExifInterface
 import com.photovideoeditor.files.SourceResolver
 import com.photovideoeditor.photo.render.PhotoAdjustmentRenderer
 import com.photovideoeditor.photo.render.PhotoAdjustments
-import com.photovideoeditor.photo.render.PhotoDepthBlur
-import com.photovideoeditor.photo.render.PhotoDepthBlurRenderer
 import com.photovideoeditor.photo.render.PhotoLayer
 import com.photovideoeditor.photo.render.PhotoLayerRenderer
 import com.photovideoeditor.photo.render.PhotoTransformState
@@ -45,7 +43,6 @@ object PhotoExporter {
     sourceUri: String,
     transform: PhotoTransformState,
     adjustments: PhotoAdjustments,
-    depthBlur: PhotoDepthBlur,
     layers: List<PhotoLayer>,
     exportOptions: JSONObject?
   ): PhotoExportResult {
@@ -73,8 +70,7 @@ object PhotoExporter {
     val upright = applyExifOrientation(decoded, exifOrientation)
     val transformed = applyTransform(upright, transform)
     val adjusted = PhotoAdjustmentRenderer.apply(transformed, adjustments)
-    val blurred = PhotoDepthBlurRenderer.apply(adjusted, depthBlur)
-    val layered = PhotoLayerRenderer.render(blurred, layers) { uri -> resolveSticker(context, uri) }
+    val layered = PhotoLayerRenderer.render(adjusted, layers) { uri -> resolveImageUri(context, uri) }
     val cropped = cropBitmap(layered, transform)
     val resized = resizeToFit(cropped, maxWidth, maxHeight)
 
@@ -110,8 +106,8 @@ object PhotoExporter {
     )
   }
 
-  private fun resolveSticker(context: Context, uri: String): Bitmap? {
-    val path = SourceResolver.resolvePath(context, uri, "pve_sticker_export") ?: return null
+  private fun resolveImageUri(context: Context, uri: String): Bitmap? {
+    val path = SourceResolver.resolvePath(context, uri, "pve_layer_image_export") ?: return null
     return BitmapFactory.decodeFile(path)
   }
 
@@ -135,9 +131,7 @@ object PhotoExporter {
   }
 
   private fun applyTransform(bitmap: Bitmap, transform: PhotoTransformState): Bitmap {
-    if (transform.rotationDegrees == 0 && transform.straightenDegrees == 0f &&
-      transform.flip == com.photovideoeditor.photo.render.FlipState.NONE
-    ) return bitmap
+    if (transform.rotationDegrees == 0 && transform.straightenDegrees == 0f) return bitmap
     return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, transform.toMatrix(), true)
   }
 

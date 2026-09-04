@@ -13,23 +13,22 @@ enum PhotoLayerRenderer {
   static func builtinStickerIDs() -> [String] { Array(builtinStickers.keys).sorted() }
   static func glyph(for stickerID: String) -> String { builtinStickers[stickerID] ?? "★" }
 
-  static func render(_ base: UIImage, layers: [PhotoLayer], stickerResolver: (String) -> UIImage?) -> UIImage {
+  static func render(_ base: UIImage, layers: [PhotoLayer], imageResolver: (String) -> UIImage? = { _ in nil }) -> UIImage {
     guard !layers.isEmpty else { return base }
-    let shortSide = min(base.size.width, base.size.height)
     let renderer = PhotoEditSession.pixelRenderer(size: base.size)
     return renderer.image { context in
       base.draw(in: CGRect(origin: .zero, size: base.size))
       for layer in layers where layer.visible {
+        let geometry = OverlayGeometry.map(layer, frameSize: base.size)
         let ctx = context.cgContext
         ctx.saveGState()
-        ctx.translateBy(x: layer.x * base.size.width, y: layer.y * base.size.height)
-        ctx.rotate(by: layer.rotationDegrees * .pi / 180)
-        ctx.scaleBy(x: layer.scale, y: layer.scale)
+        ctx.translateBy(x: geometry.center.x, y: geometry.center.y)
+        ctx.rotate(by: geometry.rotationDegrees * .pi / 180)
+        ctx.scaleBy(x: geometry.scale, y: geometry.scale)
         switch layer.type {
-        case .text: drawText(layer, shortSide: shortSide)
-        case .sticker: drawSticker(layer, shortSide: shortSide, resolver: stickerResolver)
-        case .shape: drawShape(ctx, layer, shortSide: shortSide)
-        case .drawing: drawStroke(ctx, layer, width: base.size.width, height: base.size.height, shortSide: shortSide)
+        case .text: drawText(layer, shortSide: geometry.shortSide)
+        case .sticker: drawSticker(layer, shortSide: geometry.shortSide, resolver: imageResolver)
+        case .overlay: drawOverlay(layer, canvasWidth: base.size.width, resolver: imageResolver)
         }
         ctx.restoreGState()
       }
@@ -68,43 +67,19 @@ enum PhotoLayerRenderer {
     attributed.draw(at: CGPoint(x: -textSize.width / 2, y: -size / 2), withAlpha: layer.opacity)
   }
 
-  private static func drawShape(_ ctx: CGContext, _ layer: PhotoLayer, shortSide: CGFloat) {
-    let size = shortSide * 0.24
-    let rect = CGRect(x: -size / 2, y: -size / 2, width: size, height: size)
-    ctx.setAlpha(layer.opacity)
-    let color = layer.shapeColor.cgColor
-    if layer.shapeFilled {
-      ctx.setFillColor(color)
-    } else {
-      ctx.setStrokeColor(color)
-      ctx.setLineWidth(shortSide * 0.01)
-    }
-    switch layer.shapeKind {
-    case .rectangle:
-      layer.shapeFilled ? ctx.fill(rect) : ctx.stroke(rect)
-    case .oval:
-      layer.shapeFilled ? ctx.fillEllipse(in: rect) : ctx.strokeEllipse(in: rect)
-    case .line:
-      ctx.setStrokeColor(color)
-      ctx.setLineWidth(shortSide * 0.01)
-      ctx.move(to: CGPoint(x: -size / 2, y: 0))
-      ctx.addLine(to: CGPoint(x: size / 2, y: 0))
-      ctx.strokePath()
-    }
+  /// Draws a user-uploaded overlay image scaled to fit a box whose width equals the full canvas
+  /// width and whose height is derived from `overlayAspectRatio` — the layer's own `scale` (already
+  /// applied to the drawing context by `render`) then shrinks/grows it from there. Unlike stickers,
+  /// there is no glyph fallback: if the resolver can't produce an image, nothing is drawn.
+  private static func drawOverlay(_ layer: PhotoLayer, canvasWidth: CGFloat, resolver: (String) -> UIImage?) {
+    guard let uri = layer.overlayUri, let image = resolver(uri) else { return }
+    let aspectRatio = layer.overlayAspectRatio.flatMap { $0 > 0 ? $0 : nil } ?? (image.size.width / max(image.size.height, 1))
+    let width = canvasWidth
+    let height = width / max(aspectRatio, 0.0001)
+    let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
+    image.draw(in: rect, blendMode: .normal, alpha: layer.opacity)
   }
 
-  private static func drawStroke(_ ctx: CGContext, _ layer: PhotoLayer, width: CGFloat, height: CGFloat, shortSide: CGFloat) {
-    guard layer.drawPoints.count >= 2 else { return }
-    ctx.setAlpha(layer.opacity)
-    ctx.setStrokeColor(layer.drawColor.cgColor)
-    ctx.setLineWidth(layer.drawStrokeWidth * shortSide)
-    ctx.setLineCap(.round)
-    ctx.setLineJoin(.round)
-    let points = layer.drawPoints.map { CGPoint(x: $0.0 * width, y: $0.1 * height) }
-    ctx.move(to: points[0])
-    for point in points.dropFirst() { ctx.addLine(to: point) }
-    ctx.strokePath()
-  }
 }
 
 private extension NSAttributedString {

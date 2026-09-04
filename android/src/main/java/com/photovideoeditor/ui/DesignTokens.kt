@@ -38,6 +38,24 @@ object DesignTokens {
   const val error = 0xFFFFB4AB.toInt()
   const val errorContainer = 0xFF93000A.toInt()
 
+  // Literal Stitch accent hexes (DESIGN.md "Primary Accents & Active States"), used by the
+  // new EditorUI components below where the exact mockup hue matters more than the M3 mapping.
+  const val accentViolet = 0xFF7C3AED.toInt()
+  const val accentIndigo = 0xFF6366F1.toInt()
+  const val accentHighlightViolet = 0xFF8B5CF6.toInt()
+
+  // Literal Stitch surface hexes (DESIGN.md "Canvas & Surface Hierarchy").
+  const val canvasViewport = 0xFF09090B.toInt()
+  const val editorSurface = 0xFF121214.toInt()
+  const val elevatedPanel = 0xFF18181B.toInt()
+  const val interactiveNeutral = 0xFF27272A.toInt()
+  const val mutedBorderColor = 0xFF3F3F46.toInt()
+
+  // Literal Stitch text hexes (DESIGN.md "Typography & Content Grayscale").
+  const val textPrimary = 0xFFFFFFFF.toInt()
+  const val textSecondary = 0xFFA1A1AA.toInt()
+  const val textSubtle = 0xFF71717A.toInt()
+
   // Backwards-compatible aliases matching the flatter names `themeColor()` fallbacks used before this pass.
   const val toolbarColor = surfaceContainerLow
   const val backgroundColor = surfaceContainerLowest
@@ -65,4 +83,11 @@ object DesignTokens {
   const val radiusMd = 8
   const val radiusLg = 12
   const val radiusXl = 16
+  const val radiusSheet = 24
+
+  // Elevation tiers (DESIGN.md "Elevation & Depth"): background color + opacity percent
+  // to composite persistent chrome / floating trays / popovers over the canvas.
+  object ElevationTier1 { const val color = editorSurface; const val opacityPercent = 92 }
+  object ElevationTier2 { const val color = elevatedPanel; const val opacityPercent = 88 }
+  object ElevationTier3 { const val color = interactiveNeutral; const val opacityPercent = 100 }
 }

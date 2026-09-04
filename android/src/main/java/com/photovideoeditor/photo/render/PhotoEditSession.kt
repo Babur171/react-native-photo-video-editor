@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import androidx.exifinterface.media.ExifInterface
 import com.photovideoeditor.files.SourceResolver
+import com.photovideoeditor.media.BitmapSampling
 
 /**
  * Owns an in-memory, downsampled working copy of the source photo for fast,
@@ -17,18 +18,16 @@ class PhotoEditSession(private val context: Context, sourceUri: String, maxPrevi
     private set
   var adjustments: PhotoAdjustments = PhotoAdjustments()
     private set
-  var depthBlur: PhotoDepthBlur = PhotoDepthBlur()
-    private set
   val layerStack = PhotoLayerStack()
 
   val baseBitmap: Bitmap? = decodeUpright(context, sourceUri, maxPreviewDimension)
 
   private var cachedBaseBitmap: Bitmap? = null
-  private var cachedKey: Triple<PhotoTransformState, PhotoAdjustments, PhotoDepthBlur>? = null
+  private var cachedKey: Pair<PhotoTransformState, PhotoAdjustments>? = null
   private var cachedPreviewBitmap: Bitmap? = null
   private var cachedPreviewBase: Bitmap? = null
   private var cachedPreviewLayerRevision = -1L
-  private val stickerCache = mutableMapOf<String, Bitmap?>()
+  private val imageLayerCache = mutableMapOf<String, Bitmap?>()
 
   fun update(transform: (PhotoTransformState) -> PhotoTransformState) {
     state = transform(state)
@@ -38,63 +37,59 @@ class PhotoEditSession(private val context: Context, sourceUri: String, maxPrevi
     adjustments = transform(adjustments)
   }
 
-  fun updateDepthBlur(transform: (PhotoDepthBlur) -> PhotoDepthBlur) {
-    depthBlur = transform(depthBlur)
-  }
-
-  /** Rotate/flip/straighten + adjustments + depth blur, cached so dragging a layer doesn't re-run the full pipeline every frame. */
+  /** Rotate/straighten + adjustments, cached so dragging a layer doesn't re-run the full pipeline every frame. */
   private fun computeBase(): Bitmap? {
     val base = baseBitmap ?: return null
-    val key = Triple(state, adjustments, depthBlur)
+    val key = Pair(state, adjustments)
     cachedBaseBitmap?.let { if (cachedKey == key) return it }
-    val transformed = if (state.rotationDegrees == 0 && state.straightenDegrees == 0f && state.flip == FlipState.NONE) {
+    val transformed = if (state.rotationDegrees == 0 && state.straightenDegrees == 0f) {
       base
     } else {
       Bitmap.createBitmap(base, 0, 0, base.width, base.height, state.toMatrix(), true)
     }
     val adjusted = PhotoAdjustmentRenderer.apply(transformed, adjustments)
-    val blurred = PhotoDepthBlurRenderer.apply(adjusted, depthBlur)
-    cachedBaseBitmap = blurred
+    cachedBaseBitmap = adjusted
     cachedKey = key
-    return blurred
+    return adjusted
   }
 
-  /** Renders rotate/flip/straighten + adjustments + layers — the crop overlay draws the crop live on top of this. */
+  /** Renders rotate/straighten + adjustments + layers — the crop overlay draws the crop live on top of this. */
   fun renderPreview(): Bitmap? {
     val base = computeBase() ?: return null
     val layers = layerStack.layers
     cachedPreviewBitmap?.let { cached ->
       if (cachedPreviewBase === base && cachedPreviewLayerRevision == layerStack.revision) return cached
     }
-    return PhotoLayerRenderer.render(base, layers, ::resolveSticker).also {
+    return PhotoLayerRenderer.render(base, layers, ::resolveImageUri).also {
       cachedPreviewBitmap = it
       cachedPreviewBase = base
       cachedPreviewLayerRevision = layerStack.revision
     }
   }
 
-  /** Releases large preview and sticker bitmaps when the editor leaves the screen. */
+  /** Releases large preview and sticker/overlay bitmaps when the editor leaves the screen. */
   fun release() {
     val owned = buildSet {
       baseBitmap?.let(::add)
       cachedBaseBitmap?.let(::add)
       cachedPreviewBitmap?.let(::add)
-      stickerCache.values.filterNotNull().forEach(::add)
+      imageLayerCache.values.filterNotNull().forEach(::add)
     }
     owned.forEach { if (!it.isRecycled) it.recycle() }
     cachedBaseBitmap = null
     cachedPreviewBitmap = null
     cachedPreviewBase = null
     cachedPreviewLayerRevision = -1L
-    stickerCache.clear()
+    imageLayerCache.clear()
   }
 
-  private fun resolveSticker(uri: String): Bitmap? {
-    stickerCache[uri]?.let { return it }
-    if (stickerCache.containsKey(uri)) return null
-    val path = SourceResolver.resolvePath(context, uri, "pve_sticker")
+  /** Resolves a sticker-uri or overlay-uri layer's image URI to a decoded bitmap, caching by URI. */
+  private fun resolveImageUri(uri: String): Bitmap? {
+    imageLayerCache[uri]?.let { return it }
+    if (imageLayerCache.containsKey(uri)) return null
+    val path = SourceResolver.resolvePath(context, uri, "pve_layer_image")
     val bitmap = path?.let { BitmapFactory.decodeFile(it) }
-    stickerCache[uri] = bitmap
+    imageLayerCache[uri] = bitmap
     return bitmap
   }
 
@@ -104,10 +99,7 @@ class PhotoEditSession(private val context: Context, sourceUri: String, maxPrevi
     BitmapFactory.decodeFile(path, bounds)
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
-    var sample = 1
-    while (bounds.outWidth / (sample * 2) >= maxDimension && bounds.outHeight / (sample * 2) >= maxDimension) {
-      sample *= 2
-    }
+    val sample = BitmapSampling.inSampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
     val decoded = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
 
     val orientation = try {

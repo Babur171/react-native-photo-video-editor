@@ -3,9 +3,11 @@ package com.photovideoeditor.video.render
 import android.content.Context
 import android.net.Uri
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.photovideoeditor.photo.render.PhotoLayerStack
+import java.io.File
 
 /**
  * Owns the ExoPlayer preview instance, the ordered [VideoClip] list (the
@@ -28,19 +30,42 @@ class VideoEditSession(context: Context, val sourceUri: String) {
 
   /** Fires once the source is probed and the initial single-clip timeline is ready. */
   var onClipsReady: (() -> Unit)? = null
+    set(value) {
+      field = value
+      // Activity view construction may finish after a very fast local source
+      // reaches STATE_READY. Never lose that one-shot notification.
+      if (value != null && clips.isNotEmpty()) value.invoke()
+    }
+
+  /** Reports decoder/source failures instead of leaving a blank player forever. */
+  var onPlaybackError: ((String) -> Unit)? = null
+    set(value) {
+      field = value
+      pendingPlaybackError?.let { error -> value?.invoke(error) }
+    }
+
+  private var pendingPlaybackError: String? = null
+  private var initialTimelineCreated = false
 
   init {
-    player.setMediaItem(MediaItem.fromUri(Uri.parse(sourceUri)))
-    player.prepare()
     player.addListener(object : Player.Listener {
       override fun onPlaybackStateChanged(playbackState: Int) {
-        if (playbackState == Player.STATE_READY && clips.isEmpty() && player.duration > 0) {
+        if (playbackState == Player.STATE_READY && !initialTimelineCreated && player.duration > 0) {
+          initialTimelineCreated = true
           clips = listOf(VideoClip(sourceUri = sourceUri, originalDurationMs = player.duration))
           rebuildPlayerTimeline(preserveIndex = 0)
           onClipsReady?.invoke()
         }
       }
+
+      override fun onPlayerError(error: PlaybackException) {
+        val message = error.message ?: "The selected video could not be played."
+        pendingPlaybackError = message
+        onPlaybackError?.invoke(message)
+      }
     })
+    player.setMediaItem(MediaItem.fromUri(playbackUri(sourceUri)))
+    player.prepare()
   }
 
   /** Sum of every clip's trimmed duration — the length of the composed timeline. */
@@ -99,6 +124,13 @@ class VideoEditSession(context: Context, val sourceUri: String) {
   }
 
   fun release() {
+    onClipsReady = null
+    onPlaybackError = null
     player.release()
+  }
+
+  private fun playbackUri(value: String): Uri {
+    val parsed = Uri.parse(value)
+    return if (parsed.scheme == null) Uri.fromFile(File(value)) else parsed
   }
 }

@@ -1,6 +1,13 @@
 import AVFoundation
 import AVKit
+import PhotosUI
 import UIKit
+
+/// Distinguishes which flow a picked image is for, since photo/video and sticker/overlay all share
+/// one `PHPickerViewControllerDelegate` callback.
+private enum ImagePickPurpose {
+  case photoSticker, photoOverlay, videoSticker, videoOverlay
+}
 
 final class PhotoVideoEditorViewController: UIViewController {
   private let uri: String
@@ -14,8 +21,8 @@ final class PhotoVideoEditorViewController: UIViewController {
   private var photoSession: PhotoEditSession?
   private var cropMode = false
   private var filtersMode = false
-  private var drawMode = false
   private var stickersMode = false
+  private var pendingPickPurpose: ImagePickPurpose?
   private var activeAdjustmentKey = "brightness"
   private var selectedLayerID: String?
   private var activeLayerPropertyKey = "scale"
@@ -23,15 +30,14 @@ final class PhotoVideoEditorViewController: UIViewController {
   private var photoImageView: ZoomableImageView?
   private var cropOverlay: CropOverlayView?
   private var layerOverlay: LayerOverlayView?
-  private var drawOverlay: DrawOverlayView?
   private var straightenSlider: UISlider?
   private var cropSubBar: UIView?
   private var adjustmentSlider: UISlider?
   private var filtersSubBar: UIView?
   private var stickersSubBar: UIView?
-  private var drawSubBar: UIView?
   private var layerToolBar: UIView?
   private var layerPropertySlider: UISlider?
+  private var layerColorSwatchRow: UIView?
   private var mainToolBar: UIView?
   private var undoButton: UIButton?
   private var redoButton: UIButton?
@@ -65,12 +71,15 @@ final class PhotoVideoEditorViewController: UIViewController {
   private var selectedClipIndex = 0
   private var clipStripBar: UIStackView?
   private var clipStripScroll: UIScrollView?
-  private var clipThumbnailCache: [String: [UIImage]] = [:]
+  private var timelineThumbnailRepository: TimelineThumbnailRepository?
+  private var timelineThumbnailRequest: TimelineThumbnailRepository.Request?
+  private var timelineThumbnailFrames = [UIImage?](repeating: nil, count: 12)
 
   private var cropAspectButtons: [String: UIButton] = [:]
   private var filterAdjustmentButtons: [String: UIButton] = [:]
   private var filterPresetButtons: [String: UIButton] = [:]
   private var layerPropertyButtons: [String: UIButton] = [:]
+  private var layerIconButtons: [String: UIButton] = [:]
   private var videoToolButtons: [String: UIButton] = [:]
   private var videoAspectButtons: [String: UIButton] = [:]
 
@@ -119,7 +128,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     }
   }
 
-  // MARK: - Photo editor (crop, rotate, flip, straighten, export — Milestone 2)
+  // MARK: - Photo editor (crop, rotate, straighten, export — Milestone 2)
 
   private func buildPhotoEditor() {
     let backgroundColor = color("backgroundColor") ?? DesignTokens.surfaceContainerLowest
@@ -177,18 +186,6 @@ final class PhotoVideoEditorViewController: UIViewController {
       layers.bottomAnchor.constraint(equalTo: preview.bottomAnchor),
     ])
 
-    let drawing = DrawOverlayView()
-    drawing.isHidden = true
-    drawOverlay = drawing
-    preview.addSubview(drawing)
-    drawing.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-      drawing.leadingAnchor.constraint(equalTo: preview.leadingAnchor),
-      drawing.trailingAnchor.constraint(equalTo: preview.trailingAnchor),
-      drawing.topAnchor.constraint(equalTo: preview.topAnchor),
-      drawing.bottomAnchor.constraint(equalTo: preview.bottomAnchor),
-    ])
-
     let metadataBadge = UILabel()
     metadataBadge.text = "  ●  ORIGINAL   •   100%  "
     metadataBadge.font = .systemFont(ofSize: 10, weight: .semibold)
@@ -208,20 +205,21 @@ final class PhotoVideoEditorViewController: UIViewController {
       guard let self else { return }
       if self.cropMode { overlay.setImageBounds(bounds, resetCrop: false) }
       layers.setImageBounds(bounds)
-      drawing.setImageBounds(bounds)
     }
     overlay.onCropChanged = { left, top, right, bottom in
       session.update { $0.setCrop(left: left, top: top, right: right, bottom: bottom) }
     }
     layers.onLayerTapped = { [weak self] id in self?.selectLayer(id) }
-    layers.onLayerDragged = { [weak self] id, x, y in
+    layers.onLayerTransformChanged = { [weak self] id, x, y, scale, rotation in
       guard let self, let session = self.photoSession else { return }
       if self.dragStartSnapshot == nil { self.dragStartSnapshot = session.layerStack.layers }
-      session.layerStack.updateLive { list in list.map { $0.id == id ? { var l = $0; l.x = x; l.y = y; return l }() : $0 } }
+      session.layerStack.updateLive { list in list.map { $0.id == id ? {
+        var layer = $0; layer.x = x; layer.y = y; layer.scale = scale; layer.rotationDegrees = rotation; return layer
+      }() : $0 } }
       layers.layers = session.layerStack.layers
       self.schedulePhotoPreviewRender()
     }
-    layers.onLayerDragEnded = { [weak self] _ in
+    layers.onLayerTransformEnded = { [weak self] _ in
       guard let self, let session = self.photoSession else { return }
       if let snapshot = self.dragStartSnapshot { session.layerStack.commitSnapshot(snapshot) }
       self.dragStartSnapshot = nil
@@ -253,10 +251,6 @@ final class PhotoVideoEditorViewController: UIViewController {
     stickersBar.isHidden = true
     stickersSubBar = stickersBar
 
-    let drawBar = makeDrawSubBar(textColor: textColor, primaryColor: primaryColor, toolbarColor: toolbarColor)
-    drawBar.isHidden = true
-    drawSubBar = drawBar
-
     let layerSlider = UISlider()
     layerSlider.isHidden = true
     layerSlider.addTarget(self, action: #selector(layerPropertyChanged(_:)), for: .valueChanged)
@@ -266,12 +260,14 @@ final class PhotoVideoEditorViewController: UIViewController {
     layerBar.isHidden = true
     layerToolBar = layerBar
 
+    let colorSwatchRow = makeTextColorSwatchRow(session: session)
+    colorSwatchRow.isHidden = true
+    layerColorSwatchRow = colorSwatchRow
+
     let toolbar = makePhotoToolBar(textColor: textColor, toolbarColor: toolbarColor)
     mainToolBar = toolbar
 
-    let quickActions = makePhotoQuickActions(session: session)
-
-    let root = UIStackView(arrangedSubviews: [header, preview, straighten, cropBar, adjustmentSlider, filtersBar, stickersBar, drawBar, layerSlider, layerBar, quickActions, toolbar])
+    let root = UIStackView(arrangedSubviews: [header, preview, straighten, cropBar, adjustmentSlider, filtersBar, stickersBar, layerSlider, colorSwatchRow, layerBar, toolbar])
     root.axis = .vertical
     root.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(root)
@@ -282,12 +278,11 @@ final class PhotoVideoEditorViewController: UIViewController {
       root.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
       header.heightAnchor.constraint(equalToConstant: 60),
       toolbar.heightAnchor.constraint(equalToConstant: 72),
-      quickActions.heightAnchor.constraint(equalToConstant: 52),
-      cropBar.heightAnchor.constraint(equalToConstant: 100), // rotate/flip row (44pt) + aspect chip row (56pt)
+      cropBar.heightAnchor.constraint(equalToConstant: 100), // rotate row (44pt) + aspect chip row (56pt)
       filtersBar.heightAnchor.constraint(equalToConstant: 56),
       stickersBar.heightAnchor.constraint(equalToConstant: 56),
-      drawBar.heightAnchor.constraint(equalToConstant: 56),
       layerBar.heightAnchor.constraint(equalToConstant: 56),
+      colorSwatchRow.heightAnchor.constraint(equalToConstant: 56),
     ])
 
     let progress = UIView()
@@ -313,39 +308,6 @@ final class PhotoVideoEditorViewController: UIViewController {
     imageView.resetToFit()
   }
 
-  private func makePhotoQuickActions(session: PhotoEditSession) -> UIView {
-    let scroll = UIScrollView()
-    scroll.backgroundColor = DesignTokens.surfaceContainerLow
-    scroll.showsHorizontalScrollIndicator = false
-    let stack = UIStackView(); stack.axis = .horizontal; stack.spacing = DesignTokens.spaceSm
-    stack.isLayoutMarginsRelativeArrangement = true
-    stack.layoutMargins = UIEdgeInsets(top: 4, left: 16, bottom: 4, right: 16)
-    stack.addArrangedSubview(button("✦  Auto Enhance") { [weak self] in
-      session.updateAdjustments {
-        $0.brightness = 8; $0.contrast = 6; $0.saturation = 5; $0.sharpness = 8
-      }
-      self?.schedulePhotoPreviewRender()
-    })
-    let compare = button("◫  Hold Compare", handler: nil)
-    compare.addTarget(self, action: #selector(compareTouchDown), for: .touchDown)
-    compare.addTarget(self, action: #selector(compareTouchUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-    stack.addArrangedSubview(compare)
-    stack.addArrangedSubview(button("□  Crop 1:1") { [weak self] in
-      self?.setCropMode(true)
-      self?.cropAspectButtons["1:1"]?.sendActions(for: .touchUpInside)
-    })
-    scroll.addSubview(stack)
-    stack.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
-      stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
-      stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-      stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-      stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
-    ])
-    return scroll
-  }
-
   /// Icon-tile + label node in the main tool rail (Studio Violet "Tool Node"). Mirrors Android's `ToolNode`.
   private struct ToolNode {
     let root: UIView
@@ -355,6 +317,7 @@ final class PhotoVideoEditorViewController: UIViewController {
   }
 
   private var photoToolNodes: [String: ToolNode] = [:]
+  private weak var photoToolScroll: UIScrollView?
   /// Backs `createToolNode`'s tap handling: each node's root view registers its action here, keyed by
   /// its own identity, and a single shared `UITapGestureRecognizer` target (`self`) looks it up.
   private var toolNodeActions: [ObjectIdentifier: () -> Void] = [:]
@@ -391,6 +354,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     root.isUserInteractionEnabled = true
     toolNodeActions[ObjectIdentifier(root)] = onTap
     root.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleToolNodeTap(_:))))
+    root.applyPressScale()
     NSLayoutConstraint.activate([
       tile.widthAnchor.constraint(equalToConstant: DesignTokens.touchTargetMin),
       tile.heightAnchor.constraint(equalToConstant: DesignTokens.touchTargetMin),
@@ -404,27 +368,22 @@ final class PhotoVideoEditorViewController: UIViewController {
     node.label.textColor = selected ? textColor : DesignTokens.outline
   }
 
-  /// Full Studio Violet tool rail (see main_photo_editor_default_state mockup). Rotate/Flip live inside
-  /// the Crop sub-bar, not as top-level tools.
+  /// Full Studio Violet tool rail (see main_photo_editor_default_state mockup). Rotate lives inside
+  /// the Crop sub-bar, not as a top-level tool.
   private func makePhotoToolBar(textColor: UIColor, toolbarColor: UIColor) -> UIView {
     let tools: [(String, String, String)] = [
       ("crop", "Crop", "crop"),
       ("adjust", "Adjust", "slider.horizontal.3"),
       ("filters", "Filters", "camera.filters"),
-      ("effects", "Effects", "sparkles"),
-      ("blur", "Blur", "smoke.fill"),
       ("text", "Text", "textformat"),
       ("stickers", "Stickers", "face.smiling"),
-      ("shapes", "Shapes", "square.on.circle"),
-      ("draw", "Draw", "pencil.tip"),
-      ("frames", "Frames", "photo.on.rectangle"),
-      ("overlays", "Overlays", "square.stack.3d.up"),
-      ("background", "Background", "photo"),
+      ("overlay", "Overlay", "photo.on.rectangle.angled"),
       ("retouch", "Retouch", "wand.and.rays"),
       ("layers", "Layers", "square.3.layers.3d"),
       ("resize", "Resize", "aspectratio"),
     ]
     let scroll = UIScrollView(); scroll.backgroundColor = toolbarColor
+    photoToolScroll = scroll
     let stack = UIStackView(); stack.axis = .horizontal; stack.spacing = 12
     tools.filter { features[$0.0] as? Bool != false }.forEach { key, label, symbol in
       let node = createToolNode(systemName: symbol, labelText: label) { [weak self] in self?.onPhotoToolTapped(key) }
@@ -448,7 +407,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     let outer = UIStackView(); outer.axis = .vertical
     outer.backgroundColor = toolbarColor
 
-    // Rotate/Flip row — moved here from the main tool rail to match the crop_transform_editor mockup.
+    // Rotate row — moved here from the main tool rail to match the crop_transform_editor mockup.
     let transformRow = UIStackView(arrangedSubviews: [
       iconButton(systemName: "rotate.left", tint: textColor) { [weak self] in
         guard let self, let session = self.photoSession, let imageView = self.photoImageView else { return }
@@ -467,11 +426,6 @@ final class PhotoVideoEditorViewController: UIViewController {
           imageView.resetToFit()
           if self.cropMode { self.cropOverlay?.setImageBounds(imageView.currentImageBounds(), resetCrop: true) }
         }
-      },
-      iconButton(systemName: "arrow.left.and.right", tint: textColor) { [weak self] in
-        guard let self, let session = self.photoSession, let imageView = self.photoImageView else { return }
-        session.update { $0.cycleFlip() }
-        self.schedulePhotoPreviewRender()
       },
     ])
     transformRow.axis = .horizontal
@@ -516,15 +470,15 @@ final class PhotoVideoEditorViewController: UIViewController {
     switch key {
     case "crop":
       setCropMode(true)
-    case "adjust", "filters", "effects", "retouch":
+    case "adjust", "filters", "retouch":
       setFiltersMode(true, session: session)
     case "text":
       showTextInputDialog(session: session)
-    case "stickers", "shapes", "overlays", "frames":
+    case "stickers":
       setStickersMode(true)
-    case "draw":
-      setDrawMode(true, session: session)
-    case "background", "resize":
+    case "overlay":
+      presentImagePicker(purpose: .photoOverlay)
+    case "resize":
       setCropMode(true)
     case "layers":
       if let top = session.layerStack.layers.last { selectLayer(top.id) }
@@ -534,8 +488,8 @@ final class PhotoVideoEditorViewController: UIViewController {
     }
   }
 
-  // MARK: - Layers: text, stickers, shapes, freehand drawing, selection, and
-  // transform/duplicate/reorder/lock/hide/delete with undo/redo (Milestone 4)
+  // MARK: - Layers: text, selection, and transform/duplicate/reorder/lock/hide/delete
+  // with undo/redo (Milestone 4)
 
   private func showTextInputDialog(session: PhotoEditSession) {
     let alert = UIAlertController(title: "Add text", message: nil, preferredStyle: .alert)
@@ -556,21 +510,6 @@ final class PhotoVideoEditorViewController: UIViewController {
     stickersSubBar?.isHidden = !enabled
     mainToolBar?.isHidden = enabled
     refreshPhotoToolSelection()
-  }
-
-  private func refreshPhotoToolSelection() {
-    let textColor = color("textColor") ?? DesignTokens.onSurface
-    photoToolNodes.forEach { key, node in
-      let selected: Bool
-      switch key {
-      case "crop": selected = cropMode
-      case "adjust", "filters": selected = filtersMode
-      case "stickers": selected = stickersMode
-      case "draw": selected = drawMode
-      default: selected = false
-      }
-      setToolNodeSelected(node, selected: selected, textColor: textColor)
-    }
   }
 
   private func makeStickersSubBar(session: PhotoEditSession, textColor: UIColor, primaryColor: UIColor, toolbarColor: UIColor) -> UIView {
@@ -595,14 +534,12 @@ final class PhotoVideoEditorViewController: UIViewController {
         self?.setStickersMode(false)
       })
     }
-    let shapes: [(ShapeKind, String)] = [(.rectangle, "Rect"), (.oval, "Oval"), (.line, "Line")]
-    shapes.forEach { kind, label in
-      chipStack.addArrangedSubview(button(label, color: textColor) { [weak self] in
-        var layer = PhotoLayer(type: .shape)
-        layer.shapeKind = kind
-        session.layerStack.commit { $0 + [layer] }
-        self?.selectLayer(layer.id)
-        self?.setStickersMode(false)
+    chipStack.addArrangedSubview(button("Upload", color: textColor) { [weak self] in
+      self?.presentImagePicker(purpose: .photoSticker)
+    })
+    if features["onlineStickers"] as? Bool != false {
+      chipStack.addArrangedSubview(button("Browse", color: textColor) { [weak self] in
+        self?.presentOnlineStickerSheet(purpose: .photoSticker)
       })
     }
     scroll.addSubview(chipStack)
@@ -629,74 +566,102 @@ final class PhotoVideoEditorViewController: UIViewController {
     }
   }
 
-  private func setDrawMode(_ enabled: Bool, session: PhotoEditSession) {
-    drawMode = enabled
-    drawOverlay?.isHidden = !enabled
-    drawSubBar?.isHidden = !enabled
-    mainToolBar?.isHidden = enabled
-    layerOverlay?.isHidden = enabled
-    photoImageView?.panZoomEnabled = !enabled
-    if enabled {
-      drawOverlay?.strokeColor = .red
-      drawOverlay?.strokeWidthPx = 4
-      if let bounds = photoImageView?.currentImageBounds() { drawOverlay?.setImageBounds(bounds) }
-    } else {
-      commitDrawStrokes(session: session)
-      drawOverlay?.clearStrokes()
-    }
-    refreshPhotoToolSelection()
+  // MARK: - Native image picker (Upload chip / Overlay tool)
+
+  private func presentImagePicker(purpose: ImagePickPurpose) {
+    pendingPickPurpose = purpose
+    var configuration = PHPickerConfiguration()
+    configuration.filter = .images
+    configuration.selectionLimit = 1
+    let picker = PHPickerViewController(configuration: configuration)
+    picker.delegate = self
+    present(picker, animated: true)
   }
 
-  private func commitDrawStrokes(session: PhotoEditSession) {
-    guard let drawOverlay, drawOverlay.hasStrokes, let bounds = photoImageView?.currentImageBounds(), bounds.width > 0 else { return }
-    let shortSide = min(bounds.width, bounds.height)
-    let newLayers: [PhotoLayer] = drawOverlay.normalizedStrokes().compactMap { points, stroke in
-      guard points.count >= 2 else { return nil }
-      let centerX = points.reduce(0) { $0 + $1.0 } / CGFloat(points.count)
-      let centerY = points.reduce(0) { $0 + $1.1 } / CGFloat(points.count)
-      let offsets = points.map { ($0.0 - centerX, $0.1 - centerY) }
-      var layer = PhotoLayer(type: .drawing)
-      layer.x = centerX
-      layer.y = centerY
-      layer.drawColor = stroke.color
-      layer.drawStrokeWidth = stroke.widthPx / shortSide
-      layer.drawPoints = offsets
-      return layer
+  /// Presents the OpenMoji "Browse online" bottom sheet, reusing `handlePickedImage` as the
+  /// insertion point once the user picks a sticker — same shared path the Upload flow uses.
+  private func presentOnlineStickerSheet(purpose: ImagePickPurpose) {
+    let sheet = OnlineStickerSheetViewController()
+    sheet.onStickerPicked = { [weak self] fileURL, image in
+      self?.handlePickedImage(fileURL, image: image, purpose: purpose)
     }
-    if !newLayers.isEmpty { session.layerStack.commit { $0 + newLayers } }
-    onLayerStackChanged()
+    sheet.sheetPresentationController?.detents = [.medium(), .large()]
+    present(sheet, animated: true)
   }
 
-  private func makeDrawSubBar(textColor: UIColor, primaryColor: UIColor, toolbarColor: UIColor) -> UIView {
-    let colors: [(String, UIColor)] = [("Red", .red), ("Yellow", .yellow), ("Green", .green), ("Blue", .blue), ("White", .white), ("Black", .black)]
-    let bar = UIStackView(); bar.axis = .horizontal; bar.alignment = .center
-    let scroll = UIScrollView()
-    let chipStack = UIStackView(); chipStack.axis = .horizontal; chipStack.spacing = 4
-    colors.forEach { label, uiColor in
-      chipStack.addArrangedSubview(button(label, color: uiColor) { [weak self] in self?.drawOverlay?.strokeColor = uiColor })
+  private func writeTempImage(_ image: UIImage) -> URL? {
+    guard let data = image.pngData() ?? image.jpegData(compressionQuality: 0.92) else { return nil }
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+    do {
+      try data.write(to: url)
+      return url
+    } catch {
+      return nil
     }
-    chipStack.addArrangedSubview(button("Thin", color: textColor) { [weak self] in self?.drawOverlay?.strokeWidthPx = 2 })
-    chipStack.addArrangedSubview(button("Thick", color: textColor) { [weak self] in self?.drawOverlay?.strokeWidthPx = 10 })
-    chipStack.addArrangedSubview(button("Undo stroke", color: textColor) { [weak self] in self?.drawOverlay?.undoLastStroke() })
-    chipStack.addArrangedSubview(button("Clear", color: textColor) { [weak self] in self?.drawOverlay?.clearStrokes() })
-    scroll.addSubview(chipStack)
-    chipStack.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-      chipStack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
-      chipStack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
-      chipStack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-      chipStack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-      chipStack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
-    ])
-    bar.addArrangedSubview(scroll)
-    bar.addArrangedSubview(button("Done", color: primaryColor) { [weak self] in
-      guard let self, let session = self.photoSession else { return }
-      self.setDrawMode(false, session: session)
-    })
-    bar.backgroundColor = toolbarColor
-    bar.isLayoutMarginsRelativeArrangement = true
-    bar.layoutMargins = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
-    return bar
+  }
+
+  /// Inserts a picked image as either a sticker layer or a generic movable/resizable overlay layer,
+  /// on the matching session (photo or video), based on which flow requested the picker.
+  private func handlePickedImage(_ fileURL: URL, image: UIImage, purpose: ImagePickPurpose) {
+    let uri = fileURL.absoluteString
+    let aspectRatio = max(image.size.width, 1) / max(image.size.height, 1)
+    switch purpose {
+    case .photoSticker:
+      guard let session = photoSession else { return }
+      var layer = PhotoLayer(type: .sticker)
+      layer.stickerUri = uri
+      session.layerStack.commit { $0 + [layer] }
+      selectLayer(layer.id)
+      setStickersMode(false)
+    case .photoOverlay:
+      guard let session = photoSession else { return }
+      var layer = PhotoLayer(type: .overlay)
+      layer.overlayUri = uri
+      layer.overlayAspectRatio = aspectRatio
+      layer.scale = 0.7
+      session.layerStack.commit { $0 + [layer] }
+      selectLayer(layer.id)
+    case .videoSticker:
+      guard let session = videoSession else { return }
+      var layer = PhotoLayer(type: .sticker)
+      layer.stickerUri = uri
+      session.layerStack.commit { $0 + [layer] }
+      onVideoLayerStackChanged()
+      selectVideoLayer(layer.id, session: session)
+    case .videoOverlay:
+      guard let session = videoSession else { return }
+      var layer = PhotoLayer(type: .overlay)
+      layer.overlayUri = uri
+      layer.overlayAspectRatio = aspectRatio
+      layer.scale = 0.7
+      session.layerStack.commit { $0 + [layer] }
+      onVideoLayerStackChanged()
+      selectVideoLayer(layer.id, session: session)
+    }
+  }
+
+  private func refreshPhotoToolSelection() {
+    let textColor = color("textColor") ?? DesignTokens.onSurface
+    photoToolNodes.forEach { key, node in
+      let selected: Bool
+      switch key {
+      case "crop": selected = cropMode
+      case "adjust", "filters": selected = filtersMode
+      case "stickers": selected = stickersMode
+      default: selected = false
+      }
+      setToolNodeSelected(node, selected: selected, textColor: textColor)
+      if selected { scrollToolNodeIntoView(node) }
+    }
+  }
+
+  /// Keeps the active tool-rail node fully visible, never partially clipped at the scroll edge.
+  private func scrollToolNodeIntoView(_ node: ToolNode) {
+    guard let scroll = photoToolScroll else { return }
+    DispatchQueue.main.async {
+      let frame = node.root.convert(node.root.bounds, to: scroll)
+      scroll.scrollRectToVisible(frame.insetBy(dx: -DesignTokens.spaceSm, dy: 0), animated: true)
+    }
   }
 
   private func selectLayer(_ id: String?) {
@@ -711,13 +676,34 @@ final class PhotoVideoEditorViewController: UIViewController {
 
   private func setLayerToolBarVisible(_ visible: Bool) {
     layerToolBar?.isHidden = !visible
-    layerPropertySlider?.isHidden = !visible
     mainToolBar?.isHidden = visible
     if visible {
-      syncLayerPropertySlider()
+      // TEXT layers show only Opacity/Colors/Duplicate/Delete, and STICKER layers show only
+      // Opacity/Duplicate/Delete (no Colors) — Scale/Rotate and the lock/visibility/reorder
+      // icons don't apply to either and are hidden per the reduced action list.
+      let isText = currentSelectedLayer()?.type == .text
+      let isSticker = currentSelectedLayer()?.type == .sticker
+      let reducedControls = isText || isSticker
+      layerPropertyButtons["scale"]?.isHidden = reducedControls
+      layerPropertyButtons["rotation"]?.isHidden = reducedControls
+      layerPropertyButtons["color"]?.isHidden = !isText
+      ["lock", "visibility", "front", "back"].forEach { key in
+        layerIconButtons[key]?.isHidden = reducedControls
+      }
+      if reducedControls, ["scale", "rotation"].contains(activeLayerPropertyKey) {
+        activeLayerPropertyKey = "opacity"
+      } else if !isText, activeLayerPropertyKey == "color" {
+        activeLayerPropertyKey = reducedControls ? "opacity" : "scale"
+      }
+      layerPropertySlider?.isHidden = activeLayerPropertyKey == "color"
+      layerColorSwatchRow?.isHidden = activeLayerPropertyKey != "color"
+      if activeLayerPropertyKey != "color" { syncLayerPropertySlider() }
       let textColor = color("textColor") ?? DesignTokens.onSurface
       let primaryColor = color("primaryColor") ?? DesignTokens.primaryContainer
       refreshSelection(layerPropertyButtons, activeKey: activeLayerPropertyKey, textColor: textColor, primaryColor: primaryColor)
+    } else {
+      layerPropertySlider?.isHidden = true
+      layerColorSwatchRow?.isHidden = true
     }
   }
 
@@ -732,7 +718,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     switch activeLayerPropertyKey {
     case "rotation": (min, max, value) = (-180, 180, layer.rotationDegrees)
     case "opacity": (min, max, value) = (0, 100, layer.opacity * 100)
-    default: (min, max, value) = (30, 300, layer.scale * 100)
+    default: (min, max, value) = (20, 800, layer.scale * 100)
     }
     slider.minimumValue = Float(min)
     slider.maximumValue = Float(max)
@@ -760,14 +746,17 @@ final class PhotoVideoEditorViewController: UIViewController {
   }
 
   private func makeLayerToolBar(session: PhotoEditSession, textColor: UIColor, primaryColor: UIColor, toolbarColor: UIColor) -> UIView {
-    let properties: [(String, String)] = [("scale", "Scale"), ("rotation", "Rotate"), ("opacity", "Opacity")]
+    // "color" only makes sense for TEXT layers; its chip is hidden/shown per-selection in `setLayerToolBarVisible`.
+    let properties: [(String, String)] = [("scale", "Scale"), ("rotation", "Rotate"), ("opacity", "Opacity"), ("color", "Colors")]
     let bar = UIStackView(); bar.axis = .horizontal; bar.alignment = .center
     let scroll = UIScrollView()
     let chipStack = UIStackView(); chipStack.axis = .horizontal; chipStack.spacing = 4
     properties.forEach { key, label in
       let chip = button(label, color: textColor) { [weak self] in
         self?.activeLayerPropertyKey = key
-        self?.syncLayerPropertySlider()
+        self?.layerPropertySlider?.isHidden = key == "color"
+        self?.layerColorSwatchRow?.isHidden = key != "color"
+        if key != "color" { self?.syncLayerPropertySlider() }
         if let self { self.refreshSelection(self.layerPropertyButtons, activeKey: self.activeLayerPropertyKey, textColor: textColor, primaryColor: primaryColor) }
       }
       layerPropertyButtons[key] = chip
@@ -787,35 +776,39 @@ final class PhotoVideoEditorViewController: UIViewController {
       copy.fontFamily = original.fontFamily
       copy.stickerId = original.stickerId
       copy.stickerUri = original.stickerUri
-      copy.shapeKind = original.shapeKind
-      copy.shapeColor = original.shapeColor
-      copy.shapeFilled = original.shapeFilled
-      copy.drawColor = original.drawColor
-      copy.drawStrokeWidth = original.drawStrokeWidth
-      copy.drawPoints = original.drawPoints
+      copy.overlayUri = original.overlayUri
+      copy.overlayAspectRatio = original.overlayAspectRatio
       session.layerStack.commit { $0 + [copy] }
       self.selectLayer(copy.id)
     })
-    chipStack.addArrangedSubview(button("Lock", color: textColor) { [weak self] in
+    let lockButton = button("Lock", color: textColor) { [weak self] in
       guard let self, let id = self.selectedLayerID else { return }
       session.layerStack.commit { list in list.map { $0.id == id ? { var l = $0; l.locked.toggle(); return l }() : $0 } }
       self.onLayerStackChanged()
-    })
-    chipStack.addArrangedSubview(button("Hide", color: textColor) { [weak self] in
+    }
+    layerIconButtons["lock"] = lockButton
+    chipStack.addArrangedSubview(lockButton)
+    let visibilityButton = button("Hide", color: textColor) { [weak self] in
       guard let self, let id = self.selectedLayerID else { return }
       session.layerStack.commit { list in list.map { $0.id == id ? { var l = $0; l.visible.toggle(); return l }() : $0 } }
       self.onLayerStackChanged()
-    })
-    chipStack.addArrangedSubview(button("Front", color: textColor) { [weak self] in
+    }
+    layerIconButtons["visibility"] = visibilityButton
+    chipStack.addArrangedSubview(visibilityButton)
+    let frontButton = button("Front", color: textColor) { [weak self] in
       guard let self, let id = self.selectedLayerID else { return }
       session.layerStack.commit { list in list.filter { $0.id != id } + list.filter { $0.id == id } }
       self.onLayerStackChanged()
-    })
-    chipStack.addArrangedSubview(button("Back", color: textColor) { [weak self] in
+    }
+    layerIconButtons["front"] = frontButton
+    chipStack.addArrangedSubview(frontButton)
+    let backButton = button("Back", color: textColor) { [weak self] in
       guard let self, let id = self.selectedLayerID else { return }
       session.layerStack.commit { list in list.filter { $0.id == id } + list.filter { $0.id != id } }
       self.onLayerStackChanged()
-    })
+    }
+    layerIconButtons["back"] = backButton
+    chipStack.addArrangedSubview(backButton)
     chipStack.addArrangedSubview(button("Delete", color: textColor) { [weak self] in
       guard let self, let id = self.selectedLayerID else { return }
       session.layerStack.commit { list in list.filter { $0.id != id } }
@@ -830,6 +823,65 @@ final class PhotoVideoEditorViewController: UIViewController {
       chipStack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
       chipStack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
       chipStack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+    ])
+    bar.addArrangedSubview(scroll)
+    bar.addArrangedSubview(button("Done", color: primaryColor) { [weak self] in self?.selectLayer(nil) })
+    bar.backgroundColor = toolbarColor
+    bar.isLayoutMarginsRelativeArrangement = true
+    bar.layoutMargins = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+    return bar
+  }
+
+  /// Circular color swatch, matching the Android drawing_brush_studio mockup's palette dots.
+  private func createColorSwatch(color: UIColor, onTap: @escaping () -> Void) -> UIView {
+    let outer = UIButton(type: .custom)
+    outer.backgroundColor = DesignTokens.surfaceContainerHigh
+    outer.layer.cornerRadius = 16
+    outer.widthAnchor.constraint(equalToConstant: 32).isActive = true
+    outer.heightAnchor.constraint(equalToConstant: 32).isActive = true
+    let inner = UIView()
+    inner.backgroundColor = color
+    inner.layer.cornerRadius = 12
+    inner.isUserInteractionEnabled = false
+    inner.translatesAutoresizingMaskIntoConstraints = false
+    outer.addSubview(inner)
+    NSLayoutConstraint.activate([
+      inner.centerXAnchor.constraint(equalTo: outer.centerXAnchor),
+      inner.centerYAnchor.constraint(equalTo: outer.centerYAnchor),
+      inner.widthAnchor.constraint(equalToConstant: 24),
+      inner.heightAnchor.constraint(equalToConstant: 24),
+    ])
+    outer.addAction(UIAction { _ in onTap() }, for: .touchUpInside)
+    return outer
+  }
+
+  /// Text color swatch row, shown when a TEXT layer's "Colors" property is active.
+  private func makeTextColorSwatchRow(session: PhotoEditSession) -> UIView {
+    let toolbarColor = color("toolbarColor") ?? DesignTokens.surfaceContainerLow
+    let primaryColor = color("primaryColor") ?? DesignTokens.primaryContainer
+    let colors: [UIColor] = [
+      .white, .black, .red, UIColor(red: 255 / 255, green: 214 / 255, blue: 51 / 255, alpha: 1),
+      UIColor(red: 76 / 255, green: 217 / 255, blue: 100 / 255, alpha: 1), UIColor(red: 0, green: 145 / 255, blue: 255 / 255, alpha: 1),
+      DesignTokens.primary, DesignTokens.tertiary,
+    ]
+    let bar = UIStackView(); bar.axis = .horizontal; bar.alignment = .center
+    let scroll = UIScrollView()
+    let swatchStack = UIStackView(); swatchStack.axis = .horizontal; swatchStack.spacing = 8
+    colors.forEach { swatchColor in
+      swatchStack.addArrangedSubview(createColorSwatch(color: swatchColor) { [weak self] in
+        guard let self, let id = self.selectedLayerID else { return }
+        session.layerStack.commit { list in list.map { $0.id == id ? { var l = $0; l.textColor = swatchColor; return l }() : $0 } }
+        self.onLayerStackChanged()
+      })
+    }
+    scroll.addSubview(swatchStack)
+    swatchStack.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      swatchStack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
+      swatchStack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
+      swatchStack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+      swatchStack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+      swatchStack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
     ])
     bar.addArrangedSubview(scroll)
     bar.addArrangedSubview(button("Done", color: primaryColor) { [weak self] in self?.selectLayer(nil) })
@@ -897,9 +949,7 @@ final class PhotoVideoEditorViewController: UIViewController {
   ) -> UIView {
     let adjustmentChips: [(String, String)] = [
       ("brightness", "Brightness"), ("contrast", "Contrast"), ("saturation", "Saturation"),
-      ("exposure", "Exposure"), ("gamma", "Gamma"), ("temperature", "Temp"), ("tint", "Tint"),
-      ("highlights", "Highlights"), ("shadows", "Shadows"), ("sharpness", "Sharpen"),
-      ("blurRadius", "Blur"), ("pixelSize", "Pixelate"),
+      ("exposure", "Exposure"), ("temperature", "Temp"), ("blurRadius", "Blur"),
     ]
     let bar = UIStackView(); bar.axis = .horizontal; bar.alignment = .center
     let scroll = UIScrollView()
@@ -1001,7 +1051,6 @@ final class PhotoVideoEditorViewController: UIViewController {
       completion?(.failure(code: "E_INTERNAL", message: "Nothing to export."))
       return
     }
-    if drawMode { commitDrawStrokes(session: session) }
     progressOverlay?.isHidden = false
     let state = session.state
     let adjustments = session.adjustments
@@ -1023,7 +1072,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     }
   }
 
-  // MARK: - Video editor shell (Milestone 1 only — trim/mute/crop/etc. are Milestone 5+)
+  // MARK: - Video editor shell (Milestone 1 only — trim/crop/etc. are Milestone 5+)
 
   private func buildVideoEditor() {
     let backgroundColor = color("backgroundColor") ?? DesignTokens.surfaceContainerLowest
@@ -1076,14 +1125,16 @@ final class PhotoVideoEditorViewController: UIViewController {
       videoLayers.bottomAnchor.constraint(equalTo: preview.bottomAnchor),
     ])
     videoLayers.onLayerTapped = { [weak self] id in self?.selectVideoLayer(id, session: session) }
-    videoLayers.onLayerDragged = { [weak self] id, x, y in
+    videoLayers.onLayerTransformChanged = { [weak self] id, x, y, scale, rotation in
       guard let self else { return }
       if self.videoDragStartSnapshot == nil { self.videoDragStartSnapshot = session.layerStack.layers }
-      session.layerStack.updateLive { list in list.map { $0.id == id ? { var l = $0; l.x = x; l.y = y; return l }() : $0 } }
+      session.layerStack.updateLive { list in list.map { $0.id == id ? {
+        var layer = $0; layer.x = x; layer.y = y; layer.scale = scale; layer.rotationDegrees = rotation; return layer
+      }() : $0 } }
       videoLayers.layers = session.layerStack.layers
       self.refreshVideoOverlayPreview(session: session)
     }
-    videoLayers.onLayerDragEnded = { [weak self] _ in
+    videoLayers.onLayerTransformEnded = { [weak self] _ in
       guard let self else { return }
       if let snapshot = self.videoDragStartSnapshot { session.layerStack.commitSnapshot(snapshot) }
       self.videoDragStartSnapshot = nil
@@ -1272,13 +1323,21 @@ final class PhotoVideoEditorViewController: UIViewController {
       let naturalSize = track.naturalSize.applying(track.preferredTransform)
       videoNaturalSize = CGSize(width: max(1, abs(naturalSize.width)), height: max(1, abs(naturalSize.height)))
     }
-    guard let size = videoNaturalSize else { return }
+    guard let naturalSize = videoNaturalSize else { return }
+    let previewScale = min(1, 1280 / max(naturalSize.width, naturalSize.height))
+    let size = CGSize(width: max(2, floor(naturalSize.width * previewScale)), height: max(2, floor(naturalSize.height * previewScale)))
     let renderKey = "\(session.layerStack.revision):\(Int(size.width)):\(Int(size.height)):\(activeLayers.map(\.id).joined(separator: ","))"
     guard renderKey != videoOverlayRenderKey else { return }
     let renderer = PhotoEditSession.pixelRenderer(size: size)
     let transparent = renderer.image { _ in }
-    videoOverlayImageView?.image = PhotoLayerRenderer.render(transparent, layers: activeLayers) { [weak self] uri in self?.resolveStickerImage(uri) }
+    videoOverlayImageView?.image = PhotoLayerRenderer.render(transparent, layers: activeLayers) { [weak self] uri in self?.resolveVideoImageLayer(uri) }
     videoOverlayRenderKey = renderKey
+  }
+
+  /// One-shot resolver for sticker-uri and overlay-uri layers used by the video overlay preview.
+  private func resolveVideoImageLayer(_ uri: String) -> UIImage? {
+    guard let path = SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_video_layer") else { return nil }
+    return UIImage(contentsOfFile: path)
   }
 
   /// Where the video actually renders within `view` under aspect-fit letterboxing (mirrors `ZoomableImageView.currentImageBounds()`'s math).
@@ -1296,11 +1355,6 @@ final class PhotoVideoEditorViewController: UIViewController {
     let x = (viewWidth - fittedWidth) / 2
     let y = (viewHeight - fittedHeight) / 2
     return CGRect(x: x, y: y, width: fittedWidth, height: fittedHeight)
-  }
-
-  private func resolveStickerImage(_ uri: String) -> UIImage? {
-    guard let path = SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_video_sticker") else { return nil }
-    return UIImage(contentsOfFile: path)
   }
 
   /// Mirrors `onLayerStackChanged` for the video overlay stack (Milestone 6).
@@ -1345,7 +1399,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     case "end":
       let effectiveEnd = (layer.endMs > 0 && layer.endMs <= session.durationMs) ? layer.endMs : session.durationMs
       (min, max, value) = (0, CGFloat(session.durationMs), CGFloat(effectiveEnd))
-    default: (min, max, value) = (30, 300, layer.scale * 100)
+    default: (min, max, value) = (20, 800, layer.scale * 100)
     }
     slider.minimumValue = Float(min)
     slider.maximumValue = Float(max)
@@ -1420,30 +1474,8 @@ final class PhotoVideoEditorViewController: UIViewController {
       layer.text = text
       session.layerStack.commit { $0 + [layer] }
       self?.onVideoLayerStackChanged()
+      self?.selectVideoLayer(layer.id, session: session)
     })
-    present(alert, animated: true)
-  }
-
-  private func showVideoStickerPicker(session: VideoEditSession) {
-    let alert = UIAlertController(title: "Add sticker or shape", message: nil, preferredStyle: .actionSheet)
-    PhotoLayerRenderer.builtinStickerIDs().forEach { id in
-      alert.addAction(UIAlertAction(title: PhotoLayerRenderer.glyph(for: id), style: .default) { [weak self] _ in
-        var layer = PhotoLayer(type: .sticker)
-        layer.stickerId = id
-        session.layerStack.commit { $0 + [layer] }
-        self?.onVideoLayerStackChanged()
-      })
-    }
-    let shapes: [(ShapeKind, String)] = [(.rectangle, "▭ Rectangle"), (.oval, "◯ Oval"), (.line, "▬ Line")]
-    shapes.forEach { kind, label in
-      alert.addAction(UIAlertAction(title: label, style: .default) { [weak self] _ in
-        var layer = PhotoLayer(type: .shape)
-        layer.shapeKind = kind
-        session.layerStack.commit { $0 + [layer] }
-        self?.onVideoLayerStackChanged()
-      })
-    }
-    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
     present(alert, animated: true)
   }
 
@@ -1464,8 +1496,8 @@ final class PhotoVideoEditorViewController: UIViewController {
 
   private func makeVideoToolBar(session: VideoEditSession, playerController: AVPlayerViewController, textColor: UIColor, toolbarColor: UIColor) -> UIView {
     let tools: [(String, String)] = [
-      ("mute", "Mute"), ("cover", "Cover"), ("speed", "Speed 1x"), ("crop", "Crop"), ("rotate", "Rotate"), ("flip", "Flip"),
-      ("filters", "Filters"), ("text", "Text"), ("stickers", "Stickers"),
+      ("cover", "Cover"), ("speed", "Speed 1x"), ("crop", "Crop"), ("rotate", "Rotate"),
+      ("filters", "Filters"), ("text", "Text"), ("stickers", "Stickers"), ("overlay", "Overlay"),
     ]
     let scroll = UIScrollView(); scroll.backgroundColor = toolbarColor
     let stack = UIStackView(); stack.axis = .horizontal; stack.spacing = 8
@@ -1494,7 +1526,6 @@ final class PhotoVideoEditorViewController: UIViewController {
     videoToolButtons.forEach { key, button in
       let selected: Bool
       switch key {
-      case "mute": selected = session.state.muted
       case "crop": selected = videoAspectMode
       default: selected = false
       }
@@ -1504,19 +1535,12 @@ final class PhotoVideoEditorViewController: UIViewController {
 
   private func onVideoToolTapped(_ key: String, session: VideoEditSession, playerView: UIView?) {
     switch key {
-    case "mute":
-      session.update { $0.toggleMute() }
-      session.player.volume = session.state.muted ? 0 : 1
-      refreshVideoToolSelection(session: session)
     case "cover":
       let atMs = Int64(CMTimeGetSeconds(session.player.currentTime()) * 1000)
       session.update { $0.coverFrameMs = atMs }
       showToast("Cover frame set at \(formatMs(atMs))")
     case "rotate":
       session.update { $0.rotateRight() }
-      applyVideoPreviewTransform(playerView, state: session.state)
-    case "flip":
-      session.update { $0.toggleFlip() }
       applyVideoPreviewTransform(playerView, state: session.state)
     case "crop":
       setVideoAspectMode(true, session: session)
@@ -1528,9 +1552,45 @@ final class PhotoVideoEditorViewController: UIViewController {
       showVideoTextInputDialog(session: session)
     case "stickers":
       showVideoStickerPicker(session: session)
+    case "overlay":
+      presentImagePicker(purpose: .videoOverlay)
     default:
       showToast("\(key) is coming in a later milestone.")
     }
+  }
+
+  private func showVideoStickerPicker(session: VideoEditSession) {
+    let alert = UIAlertController(title: "Add sticker", message: nil, preferredStyle: .actionSheet)
+    PhotoLayerRenderer.builtinStickerIDs().forEach { id in
+      alert.addAction(UIAlertAction(title: PhotoLayerRenderer.glyph(for: id), style: .default) { [weak self] _ in
+        var layer = PhotoLayer(type: .sticker)
+        layer.stickerId = id
+        session.layerStack.commit { $0 + [layer] }
+        self?.onVideoLayerStackChanged()
+      })
+    }
+    consumerStickerAssets().forEach { asset in
+      alert.addAction(UIAlertAction(title: asset.id, style: .default) { [weak self] _ in
+        var layer = PhotoLayer(type: .sticker)
+        layer.stickerUri = asset.uri
+        session.layerStack.commit { $0 + [layer] }
+        self?.onVideoLayerStackChanged()
+      })
+    }
+    alert.addAction(UIAlertAction(title: "Upload", style: .default) { [weak self] _ in
+      self?.presentImagePicker(purpose: .videoSticker)
+    })
+    if features["onlineStickers"] as? Bool != false {
+      alert.addAction(UIAlertAction(title: "Browse online", style: .default) { [weak self] _ in
+        self?.presentOnlineStickerSheet(purpose: .videoSticker)
+      })
+    }
+    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+    if let popover = alert.popoverPresentationController {
+      popover.sourceView = view
+      popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.maxY - 1, width: 1, height: 1)
+    }
+    present(alert, animated: true)
   }
 
   private func formatSpeedLabel(_ speed: Float) -> String {
@@ -1538,12 +1598,8 @@ final class PhotoVideoEditorViewController: UIViewController {
     return "Speed \(trimmed)x"
   }
 
-  /// Recomputes the whole preview transform from `state` (rotation composed with flip) rather than
-  /// incrementally combining transforms, so rotating after flipping (or vice versa) never drops the other.
   private func applyVideoPreviewTransform(_ playerView: UIView?, state: VideoTransformState) {
-    var transform = CGAffineTransform(rotationAngle: CGFloat(state.rotationDegrees) * .pi / 180)
-    if state.flipHorizontal { transform = transform.concatenating(CGAffineTransform(scaleX: -1, y: 1)) }
-    playerView?.transform = transform
+    playerView?.transform = CGAffineTransform(rotationAngle: CGFloat(state.rotationDegrees) * .pi / 180)
   }
 
   private func setVideoAspectMode(_ enabled: Bool, session: VideoEditSession) {
@@ -1643,22 +1699,29 @@ final class PhotoVideoEditorViewController: UIViewController {
       start: CGFloat(clip.trimStartMs) / CGFloat(duration),
       end: CGFloat(clip.effectiveTrimEndMs()) / CGFloat(duration)
     )
-    if let cached = clipThumbnailCache[clip.id] {
-      trim.thumbnails = cached
-      return
-    }
+    timelineThumbnailRequest?.cancel()
     trim.thumbnails = []
     let clipAsset = session.asset(for: clip)
-    DispatchQueue.global(qos: .utility).async { [weak self] in
-      let thumbnails = VideoThumbnailGenerator.generate(asset: clipAsset, durationMs: clip.originalDurationMs)
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.clipThumbnailCache[clip.id] = thumbnails
-        if self.videoSession?.clips[safe: self.selectedClipIndex]?.id == clip.id {
-          trim.thumbnails = thumbnails
-        }
+    let repository = timelineThumbnailRepository ?? TimelineThumbnailRepository()
+    timelineThumbnailRepository = repository
+    timelineThumbnailFrames = [UIImage?](repeating: nil, count: 12)
+    timelineThumbnailRequest = repository.load(
+      mediaID: clip.sourceUri,
+      asset: clipAsset,
+      durationMs: clip.originalDurationMs,
+      count: 12,
+      size: CGSize(width: 144, height: 96),
+      onThumbnail: { [weak self, weak trim] index, image in
+        guard let self,
+              self.videoSession?.clips[safe: self.selectedClipIndex]?.id == clip.id else { return }
+        self.timelineThumbnailFrames[index] = image
+        trim?.thumbnails = self.timelineThumbnailFrames.compactMap { $0 }
+      },
+      onComplete: { [weak self] in
+        guard self?.videoSession?.clips[safe: self?.selectedClipIndex ?? -1]?.id == clip.id else { return }
+        self?.timelineThumbnailRequest = nil
       }
-    }
+    )
   }
 
   /// Rebuilds the clip strip: one chip per clip plus Split/Duplicate/Delete/Move-Left/Move-Right actions.
@@ -1819,23 +1882,15 @@ final class PhotoVideoEditorViewController: UIViewController {
     }
 
     let onPrimaryColor = color("onPrimaryColor") ?? DesignTokens.onPrimaryContainer
-    let export = UIButton(type: .system)
-    export.setTitle("Export", for: .normal)
-    export.setTitleColor(onPrimaryColor, for: .normal)
-    export.setImage(UIImage(systemName: "square.and.arrow.up"), for: .normal)
-    export.tintColor = onPrimaryColor
-    export.backgroundColor = primaryColor
-    export.layer.cornerRadius = DesignTokens.radiusLg
-    export.contentEdgeInsets = UIEdgeInsets(top: 0, left: DesignTokens.spaceMd, bottom: 0, right: DesignTokens.spaceLg)
-    export.titleLabel?.font = .systemFont(ofSize: 13, weight: .bold)
-    if #available(iOS 15.0, *) {
-      export.configuration = nil // avoid UIButtonConfiguration overriding contentEdgeInsets on iOS 15+
-    }
-    export.heightAnchor.constraint(equalToConstant: 40).isActive = true
-    export.addAction(UIAction { [weak self] _ in
+    let export = EditorComponents.primaryButton(
+      text: "Export",
+      systemImage: "square.and.arrow.up",
+      fillColor: primaryColor,
+      textColor: onPrimaryColor
+    ) { [weak self] in
       guard let self else { return }
       if self.mediaType == "photo" { self.showPhotoExportConfiguration() } else { self.doneEditor() }
-    }, for: .touchUpInside)
+    }
     header.addArrangedSubview(export)
 
     title.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -1850,6 +1905,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     value.widthAnchor.constraint(equalToConstant: DesignTokens.touchTargetMin).isActive = true
     value.heightAnchor.constraint(equalToConstant: DesignTokens.touchTargetMin).isActive = true
     if let handler { value.addAction(UIAction { _ in handler() }, for: .touchUpInside) }
+    value.applyPressScale()
     return value
   }
 
@@ -1968,8 +2024,15 @@ final class PhotoVideoEditorViewController: UIViewController {
     }
   }
 
+  override func didReceiveMemoryWarning() {
+    super.didReceiveMemoryWarning()
+    timelineThumbnailRepository?.clearMemory()
+  }
+
   deinit {
     positionPollTimer?.invalidate()
+    timelineThumbnailRequest?.cancel()
+    timelineThumbnailRepository?.close()
     photoSession?.release()
     videoSession?.release()
   }
@@ -1978,5 +2041,24 @@ final class PhotoVideoEditorViewController: UIViewController {
 private extension Array {
   subscript(safe index: Int) -> Element? {
     indices.contains(index) ? self[index] : nil
+  }
+}
+
+extension PhotoVideoEditorViewController: PHPickerViewControllerDelegate {
+  func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+    picker.dismiss(animated: true)
+    guard let purpose = pendingPickPurpose, let provider = results.first?.itemProvider else {
+      pendingPickPurpose = nil
+      return
+    }
+    pendingPickPurpose = nil
+    guard provider.canLoadObject(ofClass: UIImage.self) else { return }
+    // `loadObject`'s completion runs off the main thread — hop back before touching UI/session state.
+    provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
+      guard let self, let image = object as? UIImage, let fileURL = self.writeTempImage(image) else { return }
+      DispatchQueue.main.async {
+        self.handlePickedImage(fileURL, image: image, purpose: purpose)
+      }
+    }
   }
 }

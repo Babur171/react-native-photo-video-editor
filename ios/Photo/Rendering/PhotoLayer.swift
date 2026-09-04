@@ -1,21 +1,15 @@
 import UIKit
 
 enum LayerType {
-  case text, sticker, shape, drawing
+  case text, sticker, overlay
 }
 
-enum ShapeKind {
-  case rectangle, oval, line
-}
-
-/// A single non-destructive overlay layer (text, sticker, shape, or freehand
-/// drawing). One flat model covers every type for simplicity — a documented
-/// simplification versus a per-type hierarchy. Mirrors `PhotoLayer.kt`.
+/// A single non-destructive overlay layer (text, sticker, or a user-uploaded
+/// overlay image). One flat model covers every type for simplicity — a
+/// documented simplification versus a per-type hierarchy. Mirrors
+/// `PhotoLayer.kt`.
 ///
-/// `x`/`y` are the layer's center, normalized 0..1 against the image. For
-/// drawing layers, `drawPoints` are offsets from that center, also normalized
-/// against image width/height, so the whole stroke moves/scales/rotates as a
-/// unit with the layer's transform.
+/// `x`/`y` are the layer's center, normalized 0..1 against the image.
 struct PhotoLayer {
   let id: String
   var type: LayerType
@@ -34,14 +28,9 @@ struct PhotoLayer {
   // Sticker
   var stickerId: String?
   var stickerUri: String?
-  // Shape
-  var shapeKind: ShapeKind = .rectangle
-  var shapeColor: UIColor = .white
-  var shapeFilled: Bool = true
-  // Drawing
-  var drawColor: UIColor = .red
-  var drawStrokeWidth: CGFloat = 0.012
-  var drawPoints: [(CGFloat, CGFloat)] = []
+  // Overlay (user-uploaded image, placed as a fully generic movable/resizable/rotatable layer)
+  var overlayUri: String?
+  var overlayAspectRatio: CGFloat?
   // Timing (video overlays only; ignored for photo layers). endMs <= 0 means "to end of video".
   var startMs: Int64 = 0
   var endMs: Int64 = 0
@@ -52,8 +41,19 @@ struct PhotoLayer {
   }
 
   /// True if this layer should be visible at `positionMs` against a video of `durationMs`. Always true for photo layers.
+  func effectiveEndMs(durationMs: Int64) -> Int64 {
+    (endMs > 0 && endMs <= durationMs) ? endMs : durationMs
+  }
+
   func isActive(atMs positionMs: Int64, durationMs: Int64) -> Bool {
-    let effectiveEnd = (endMs > 0 && endMs <= durationMs) ? endMs : durationMs
-    return positionMs >= startMs && positionMs <= effectiveEnd
+    guard visible, durationMs >= 0 else { return false }
+    let clamped = max(positionMs, 0)
+    guard clamped >= max(startMs, 0) else { return false }
+    // No explicit end (or one at/past the video's end) means "visible through the real last
+    // frame" — don't compare against `durationMs`, which is a separately-computed estimate
+    // that can be a few ms shy of the true final frame's timestamp due to frame-rate rounding,
+    // which would otherwise hide the overlay early.
+    if endMs <= 0 || endMs >= durationMs { return true }
+    return clamped <= endMs
   }
 }

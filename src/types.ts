@@ -27,13 +27,12 @@ export interface EditorSource {
 export interface EditorFeatures {
   /** Enables cropping. */ crop?: boolean;
   /** Enables rotation. */ rotate?: boolean;
-  /** Enables flipping. */ flip?: boolean;
   /** Enables video trimming. */ trim?: boolean;
-  /** Enables video mute. */ mute?: boolean;
   /** Enables filters. */ filters?: boolean;
   /** Enables text overlays. */ text?: boolean;
-  /** Enables stickers. */ stickers?: boolean;
-  /** Enables drawing. */ draw?: boolean;
+  /** Enables stickers (built-in, consumer-supplied, and user-uploaded). */ stickers?: boolean;
+  /** Enables the user-uploaded image overlay tool. */ overlays?: boolean;
+  /** Enables browsing/downloading free stickers from the internet (OpenMoji). Disable to prevent any network calls. */ onlineStickers?: boolean;
 }
 /** Future native editor appearance options. */
 export interface EditorTheme {
@@ -54,15 +53,15 @@ export interface ExportOptions {
   /** Video frame rate in frames per second; must be positive. */ frameRate?: number;
   /** Whether future exports should retain safe metadata. */ preserveMetadata?: boolean;
 }
-/** A consumer-provided sticker image, selectable from the Stickers tool. */
-export interface StickerAsset {
-  /** Stable identifier, echoed back on layers created from this asset. */ id: string;
-  /** Local file/content URI of the sticker image. */ uri: string;
-}
 /** A consumer-provided font for text layers. Licensing is the consumer's responsibility. */
 export interface FontAsset {
   /** Font family name used to select this font from a text layer. */ family: string;
   /** Local file URI of the font file (e.g. .ttf/.otf). */ uri: string;
+}
+/** A consumer-provided sticker image, selectable from the Stickers tool. */
+export interface StickerAsset {
+  /** Stable identifier, echoed back on layers created from this asset. */ id: string;
+  /** Local file/content URI of the sticker image. */ uri: string;
 }
 /** Options accepted by {@link openEditor}. */
 export interface EditorOptions {
@@ -71,7 +70,7 @@ export interface EditorOptions {
   /** Native UI theme. */ theme?: EditorTheme;
   /** Export preferences. */ export?: ExportOptions;
   /** Requests saving to the gallery. Currently ignored by the placeholder. */ saveToGallery?: boolean;
-  /** Consumer-provided stickers offered by the Stickers tool, in addition to the small built-in set. */ stickerAssets?: StickerAsset[];
+  /** Consumer-provided stickers offered by the Stickers tool, in addition to the small built-in set and end-user uploads. */ stickerAssets?: StickerAsset[];
   /** Consumer-provided fonts selectable from the Text tool. */ fonts?: FontAsset[];
 }
 export interface PhotoEditorOptions extends Omit<EditorOptions, 'source'> {

@@ -32,6 +32,24 @@ enum DesignTokens {
   static let secondary = UIColor(red: 0xC0 / 255, green: 0xC1 / 255, blue: 0xFF / 255, alpha: 1)
   static let tertiary = UIColor(red: 0xD0 / 255, green: 0xBC / 255, blue: 0xFF / 255, alpha: 1)
 
+  // Literal Stitch accent hexes (DESIGN.md "Primary Accents & Active States"), used by the
+  // new EditorUI components where the exact mockup hue matters more than the M3 mapping.
+  static let accentViolet = UIColor(red: 0x7C / 255, green: 0x3A / 255, blue: 0xED / 255, alpha: 1)
+  static let accentIndigo = UIColor(red: 0x63 / 255, green: 0x66 / 255, blue: 0xF1 / 255, alpha: 1)
+  static let accentHighlightViolet = UIColor(red: 0x8B / 255, green: 0x5C / 255, blue: 0xF6 / 255, alpha: 1)
+
+  // Literal Stitch surface hexes (DESIGN.md "Canvas & Surface Hierarchy").
+  static let canvasViewport = UIColor(red: 0x09 / 255, green: 0x09 / 255, blue: 0x0B / 255, alpha: 1)
+  static let editorSurface = UIColor(red: 0x12 / 255, green: 0x12 / 255, blue: 0x14 / 255, alpha: 1)
+  static let elevatedPanel = UIColor(red: 0x18 / 255, green: 0x18 / 255, blue: 0x1B / 255, alpha: 1)
+  static let interactiveNeutral = UIColor(red: 0x27 / 255, green: 0x27 / 255, blue: 0x2A / 255, alpha: 1)
+  static let mutedBorderColor = UIColor(red: 0x3F / 255, green: 0x3F / 255, blue: 0x46 / 255, alpha: 1)
+
+  // Literal Stitch text hexes (DESIGN.md "Typography & Content Grayscale").
+  static let textPrimary = UIColor.white
+  static let textSecondary = UIColor(red: 0xA1 / 255, green: 0xA1 / 255, blue: 0xAA / 255, alpha: 1)
+  static let textSubtle = UIColor(red: 0x71 / 255, green: 0x71 / 255, blue: 0x7A / 255, alpha: 1)
+
   // Spacing (points), matching DESIGN.md's `space-*` scale.
   static let spaceXs: CGFloat = 4
   static let spaceSm: CGFloat = 8
@@ -47,4 +65,11 @@ enum DesignTokens {
   static let radiusMd: CGFloat = 8
   static let radiusLg: CGFloat = 12
   static let radiusXl: CGFloat = 16
+  static let radiusSheet: CGFloat = 24
+
+  // Elevation tiers (DESIGN.md "Elevation & Depth"): background color + opacity to composite
+  // persistent chrome / floating trays / popovers over the canvas.
+  enum ElevationTier1 { static let color = editorSurface; static let opacity: CGFloat = 0.92 }
+  enum ElevationTier2 { static let color = elevatedPanel; static let opacity: CGFloat = 0.88 }
+  enum ElevationTier3 { static let color = interactiveNeutral; static let opacity: CGFloat = 1.0 }
 }

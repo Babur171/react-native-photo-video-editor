@@ -7780,6 +7780,7 @@ __metadata:
     react-native-builder-bob: "npm:^0.43.0"
     react-native-image-picker: "npm:8.2.1"
     react-native-monorepo-config: "npm:^0.4.0"
+    react-native-video: "npm:^6.19.2"
   languageName: unknown
   linkType: soft
 
@@ -7813,6 +7814,16 @@ __metadata:
     react-native: "*"
   languageName: unknown
   linkType: soft
+
+"react-native-video@npm:^6.19.2":
+  version: 6.19.2
+  resolution: "react-native-video@npm:6.19.2"
+  peerDependencies:
+    react: "*"
+    react-native: "*"
+  checksum: 10c0/f5e06d4b38ebdbe082e344659deeb64f11e42567f5b89f48b9c6013118643b21687cea7b3f89f593ea77f3b32307423fcdfc26830d399eaa3335dafc16c4be5a
+  languageName: node
+  linkType: hard
 
 "react-native@npm:0.85.0":
   version: 0.85.0
