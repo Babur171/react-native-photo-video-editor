@@ -29,6 +29,7 @@ enum PhotoLayerRenderer {
         case .text: drawText(layer, shortSide: geometry.shortSide)
         case .sticker: drawSticker(layer, shortSide: geometry.shortSide, resolver: imageResolver)
         case .overlay: drawOverlay(layer, canvasWidth: base.size.width, resolver: imageResolver)
+        case .drawing: drawStroke(ctx, layer, width: base.size.width, height: base.size.height, shortSide: geometry.shortSide)
         }
         ctx.restoreGState()
       }
@@ -78,6 +79,19 @@ enum PhotoLayerRenderer {
     let height = width / max(aspectRatio, 0.0001)
     let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
     image.draw(in: rect, blendMode: .normal, alpha: layer.opacity)
+  }
+
+  private static func drawStroke(_ ctx: CGContext, _ layer: PhotoLayer, width: CGFloat, height: CGFloat, shortSide: CGFloat) {
+    guard layer.drawPoints.count >= 2 else { return }
+    ctx.setAlpha(layer.opacity)
+    ctx.setStrokeColor(layer.drawColor.cgColor)
+    ctx.setLineWidth(layer.drawStrokeWidth * shortSide)
+    ctx.setLineCap(.round)
+    ctx.setLineJoin(.round)
+    let points = layer.drawPoints.map { CGPoint(x: $0.0 * width, y: $0.1 * height) }
+    ctx.move(to: points[0])
+    points.dropFirst().forEach { ctx.addLine(to: $0) }
+    ctx.strokePath()
   }
 
 }

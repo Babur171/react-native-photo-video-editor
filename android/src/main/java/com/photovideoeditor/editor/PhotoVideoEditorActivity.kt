@@ -39,7 +39,9 @@ import com.photovideoeditor.photo.render.PhotoEditSession
 import com.photovideoeditor.photo.render.PhotoFilterPresets
 import com.photovideoeditor.photo.render.PhotoLayer
 import com.photovideoeditor.photo.render.PhotoLayerRenderer
+import com.photovideoeditor.photo.render.PhotoTransformState
 import com.photovideoeditor.photo.ui.CropOverlayView
+import com.photovideoeditor.photo.ui.DrawOverlayView
 import com.photovideoeditor.photo.ui.FilterThumbnailLoader
 import com.photovideoeditor.video.export.VideoExportException
 import com.photovideoeditor.video.export.VideoExporter
@@ -51,6 +53,7 @@ import com.photovideoeditor.photo.ui.LayerOverlayView
 import com.photovideoeditor.photo.ui.PhotoPreviewRenderCoordinator
 import com.photovideoeditor.photo.ui.ZoomableImageView
 import com.photovideoeditor.stickers.OnlineStickerSheet
+import com.photovideoeditor.stickers.RuntimeSticker
 import com.photovideoeditor.ui.DesignTokens
 import com.photovideoeditor.ui.components.applyPressScale
 import com.photovideoeditor.ui.components.editorChip
@@ -67,8 +70,10 @@ class PhotoVideoEditorActivity : Activity() {
 
   private var photoSession: PhotoEditSession? = null
   private var cropMode = false
+  private var cropEntryState: PhotoTransformState? = null
   private var adjustMode = false
   private var filtersMode = false
+  private var drawMode = false
   private var stickersMode = false
   private lateinit var stickersSubBar: View
   private var activeAdjustmentKey = "brightness"
@@ -78,11 +83,13 @@ class PhotoVideoEditorActivity : Activity() {
   private lateinit var photoImageView: ZoomableImageView
   private lateinit var cropOverlay: CropOverlayView
   private lateinit var layerOverlay: LayerOverlayView
+  private lateinit var drawOverlay: DrawOverlayView
   private lateinit var straightenSeekBar: SeekBar
   private lateinit var cropSubBar: View
   private lateinit var adjustmentSeekBar: SeekBar
   private lateinit var filtersSubBar: View
   private lateinit var adjustSubBar: View
+  private lateinit var drawSubBar: View
   private lateinit var layerToolBar: View
   private lateinit var layerPropertySeekBar: SeekBar
   private lateinit var layerColorSwatchRow: View
@@ -234,18 +241,6 @@ class PhotoVideoEditorActivity : Activity() {
     )
     previewContainer.addView(imageView, FrameLayout.LayoutParams(MATCH, MATCH))
 
-    previewContainer.addView(TextView(this).apply {
-      text = "●  ORIGINAL   •   100%"
-      textSize = 10f
-      letterSpacing = 0.08f
-      setTextColor(DesignTokens.onSurfaceVariant)
-      gravity = Gravity.CENTER
-      background = roundedDrawable(DesignTokens.withAlphaPercent(DesignTokens.surfaceContainerHigh, 92), DesignTokens.radiusLg)
-      setPadding(dp(DesignTokens.spaceMd), dp(DesignTokens.spaceXs), dp(DesignTokens.spaceMd), dp(DesignTokens.spaceXs))
-    }, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-      topMargin = dp(DesignTokens.spaceSm)
-    })
-
     val overlay = CropOverlayView(this).apply { visibility = View.GONE }
     cropOverlay = overlay
     previewContainer.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -254,12 +249,20 @@ class PhotoVideoEditorActivity : Activity() {
     layerOverlay = layers
     previewContainer.addView(layers, FrameLayout.LayoutParams(MATCH, MATCH))
 
+    val drawing = DrawOverlayView(this).apply { visibility = View.GONE }
+    drawOverlay = drawing
+    previewContainer.addView(drawing, FrameLayout.LayoutParams(MATCH, MATCH))
+
     imageView.onBoundsChanged = { bounds ->
       if (cropMode) overlay.setImageBounds(bounds, resetCrop = false)
       layers.setImageBounds(bounds)
+      drawing.setImageBounds(bounds)
     }
     overlay.onCropChanged = { left, top, right, bottom -> session.update { it.withCrop(left, top, right, bottom) } }
     layers.onLayerTapped = { id -> selectLayer(id) }
+    layers.onLayerDoubleTapped = { id ->
+      session.layerStack.layers.firstOrNull { it.id == id && it.type == LayerType.TEXT }?.let { showTextInputDialog(session, it) }
+    }
     layers.onLayerTransformChanged = { id, x, y, scale, rotation ->
       if (dragStartSnapshot == null) dragStartSnapshot = session.layerStack.layers
       session.layerStack.updateLive { list ->
@@ -342,6 +345,11 @@ class PhotoVideoEditorActivity : Activity() {
     stickersBar.visibility = View.GONE
     root.addView(stickersBar, LinearLayout.LayoutParams(MATCH, dp(ASSET_GRID_BAR_HEIGHT_DP)))
 
+    val drawBar = createDrawSubBar(session)
+    drawSubBar = drawBar
+    drawBar.visibility = View.GONE
+    root.addView(drawBar, LinearLayout.LayoutParams(MATCH, dp(56)))
+
     val layerPropertySeek = SeekBar(this).apply {
       visibility = View.GONE
       setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -381,6 +389,7 @@ class PhotoVideoEditorActivity : Activity() {
         resizeBar to dp(56),
         filtersBar to dp(FILTERS_SUB_BAR_HEIGHT_DP),
         stickersBar to dp(ASSET_GRID_BAR_HEIGHT_DP),
+        drawBar to dp(56),
         layerBar to dp(56)
       )
     )
@@ -394,9 +403,7 @@ class PhotoVideoEditorActivity : Activity() {
     Triple("filters", "Filters", R.drawable.ic_photo_filter),
     Triple("text", "Text", R.drawable.ic_title),
     Triple("stickers", "Stickers", R.drawable.ic_sentiment_satisfied),
-    Triple("overlay", "Overlay", R.drawable.ic_wallpaper),
-    Triple("retouch", "Retouch", R.drawable.ic_face),
-    Triple("layers", "Layers", R.drawable.ic_layers),
+    Triple("draw", "Draw", R.drawable.ic_draw),
     Triple("resize", "Resize", R.drawable.ic_aspect_ratio)
   )
 
@@ -438,6 +445,7 @@ class PhotoVideoEditorActivity : Activity() {
         "adjust" -> adjustMode
         "filters" -> filtersMode
         "stickers" -> stickersMode
+        "draw" -> drawMode
         "resize" -> resizeMode
         else -> false
       }
@@ -465,19 +473,11 @@ class PhotoVideoEditorActivity : Activity() {
       "adjust" -> setAdjustMode(true, session)
       "filters" -> setFiltersMode(true, session)
       "text" -> showTextInputDialog(session)
-      "stickers" -> setStickersMode(true, session)
-      "overlay" -> launchOverlayPicker(REQUEST_CODE_OVERLAY_UPLOAD)
+      "stickers" -> showStickerBottomSheet(session)
+      "draw" -> setDrawMode(true, session)
       "resize" -> setResizeMode(true, session, imageView, overlay)
-      "retouch" -> setAdjustMode(true, session)
-      "layers" -> openLayerManager(session)
       else -> Toast.makeText(this, "$key is coming in a later milestone.", Toast.LENGTH_SHORT).show()
     }
-  }
-
-  private fun openLayerManager(session: PhotoEditSession) {
-    val top = session.layerStack.layers.lastOrNull()
-    if (top == null) Toast.makeText(this, "Add content to start a layer stack.", Toast.LENGTH_LONG).show()
-    else selectLayer(top.id)
   }
 
   // ---------------------------------------------------------------------
@@ -485,31 +485,47 @@ class PhotoVideoEditorActivity : Activity() {
   // transform/duplicate/reorder/lock/hide/delete with undo/redo (Milestone 4).
   // ---------------------------------------------------------------------
 
-  private fun showTextInputDialog(session: PhotoEditSession) {
+  private fun showTextInputDialog(session: PhotoEditSession, editingLayer: PhotoLayer? = null) {
+    var selectedColor = editingLayer?.textColor ?: Color.WHITE
     val input = EditText(this).apply {
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-      setTextColor(DesignTokens.onSurface)
+      setTextColor(selectedColor)
       setHintTextColor(DesignTokens.outline)
       hint = "Type something..."
+      setText(editingLayer?.text.orEmpty())
+      gravity = Gravity.CENTER
       setPadding(dp(DesignTokens.spaceLg), dp(DesignTokens.spaceLg), dp(DesignTokens.spaceLg), dp(DesignTokens.spaceLg))
     }
-    val container = FrameLayout(this).apply {
-      background = roundedDrawable(DesignTokens.surfaceContainerHigh, DesignTokens.radiusLg)
-      addView(input, FrameLayout.LayoutParams(MATCH, WRAP))
+    val colors = listOf(Color.WHITE, Color.BLACK, Color.RED, Color.YELLOW, Color.GREEN, Color.CYAN, Color.BLUE, Color.MAGENTA)
+    val colorRow = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER
+      colors.forEach { color ->
+        addView(createColorSwatch(color) { selectedColor = color; input.setTextColor(color) }, LinearLayout.LayoutParams(dp(40), dp(40)))
+      }
     }
-    AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-      .setTitle("Add text")
+    val container = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      background = roundedDrawable(DesignTokens.surfaceContainerHigh, DesignTokens.radiusLg)
+      addView(input, LinearLayout.LayoutParams(MATCH, dp(220)))
+      addView(HorizontalScrollView(this@PhotoVideoEditorActivity).apply { addView(colorRow) }, LinearLayout.LayoutParams(MATCH, dp(56)))
+    }
+    val dialog = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+      .setTitle(if (editingLayer == null) "Add text" else "Edit text")
       .setView(container)
-      .setPositiveButton("Add") { _, _ ->
+      .setPositiveButton("Done") { _, _ ->
         val text = input.text?.toString().orEmpty()
         if (text.isNotBlank()) {
-          val layer = PhotoLayer(type = LayerType.TEXT, text = text)
-          session.layerStack.commit { it + layer }
+          val layer = editingLayer?.copy(text = text, textColor = selectedColor)
+            ?: PhotoLayer(type = LayerType.TEXT, text = text, textColor = selectedColor)
+          session.layerStack.commit { list -> if (editingLayer == null) list + layer else list.map { if (it.id == layer.id) layer else it } }
           selectLayer(layer.id)
         }
       }
       .setNegativeButton("Cancel", null)
-      .show()
+      .create()
+    dialog.setOnShowListener { dialog.window?.setLayout(MATCH, MATCH); input.requestFocus() }
+    dialog.show()
   }
 
   private fun setStickersMode(enabled: Boolean, session: PhotoEditSession) {
@@ -517,6 +533,21 @@ class PhotoVideoEditorActivity : Activity() {
     stickersSubBar.visibility = if (enabled) View.VISIBLE else View.GONE
     mainToolBar.visibility = if (enabled) View.GONE else View.VISIBLE
     refreshPhotoToolSelection()
+  }
+
+  private fun showStickerBottomSheet(session: PhotoEditSession) {
+    stickersMode = true
+    refreshPhotoToolSelection()
+    OnlineStickerSheet(this, runtimeStickerAssets()) { path ->
+      val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = Uri.fromFile(File(path)).toString())
+      session.layerStack.commit { it + layer }
+      selectLayer(layer.id)
+    }.apply {
+      setOnDismissListener {
+        stickersMode = false
+        refreshPhotoToolSelection()
+      }
+    }.show()
   }
 
   /** One asset card in the Stickers library grid (see stickers_shapes_library mockup). */
@@ -605,30 +636,75 @@ class PhotoVideoEditorActivity : Activity() {
             },
             LinearLayout.LayoutParams(WRAP, WRAP).apply { marginEnd = dp(DesignTokens.spaceSm) }
           )
-          val features = request.optJSONObject("features")
-          if (features?.optBoolean("onlineStickers", true) != false) {
-            val browseIcon = ImageView(this@PhotoVideoEditorActivity).apply {
-              setImageResource(R.drawable.ic_photo_filter)
-              setColorFilter(DesignTokens.tertiary)
-            }
-            addView(
-              createAssetCard(browseIcon, "Browse") {
-                OnlineStickerSheet(this@PhotoVideoEditorActivity) { path ->
-                  val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = Uri.fromFile(File(path)).toString())
-                  session.layerStack.commit { it + layer }
-                  selectLayer(layer.id)
-                  setStickersMode(false, session)
-                }.show()
-              },
-              LinearLayout.LayoutParams(WRAP, WRAP).apply { marginEnd = dp(DesignTokens.spaceSm) }
-            )
-          }
         })
       }, LinearLayout.LayoutParams(0, MATCH, 1f))
       addView(
         actionButton("Done") { setStickersMode(false, session) }.apply { setTextColor(primaryColor) },
         LinearLayout.LayoutParams(dp(72), MATCH)
       )
+    }
+  }
+
+  private fun setDrawMode(enabled: Boolean, session: PhotoEditSession) {
+    drawMode = enabled
+    drawOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
+    drawSubBar.visibility = if (enabled) View.VISIBLE else View.GONE
+    mainToolBar.visibility = if (enabled) View.GONE else View.VISIBLE
+    layerOverlay.visibility = if (enabled) View.GONE else View.VISIBLE
+    photoImageView.panZoomEnabled = !enabled
+    if (enabled) {
+      drawOverlay.strokeColor = Color.RED
+      drawOverlay.strokeWidthPx = dp(4).toFloat()
+      drawOverlay.setImageBounds(photoImageView.currentImageBounds())
+    } else {
+      commitDrawStrokes(session)
+      drawOverlay.clearStrokes()
+    }
+    refreshPhotoToolSelection()
+  }
+
+  private fun commitDrawStrokes(session: PhotoEditSession) {
+    if (!drawOverlay.hasStrokes) return
+    val bounds = photoImageView.currentImageBounds()
+    val shortSide = minOf(bounds.width(), bounds.height())
+    if (shortSide <= 0f) return
+    val newLayers = drawOverlay.normalizedStrokes().mapNotNull { (points, stroke) ->
+      if (points.size < 2) return@mapNotNull null
+      val centerX = points.sumOf { it.first.toDouble() }.toFloat() / points.size
+      val centerY = points.sumOf { it.second.toDouble() }.toFloat() / points.size
+      PhotoLayer(
+        type = LayerType.DRAWING,
+        x = centerX,
+        y = centerY,
+        drawColor = stroke.color,
+        drawStrokeWidth = stroke.widthPx / shortSide,
+        drawPoints = points.map { (x, y) -> (x - centerX) to (y - centerY) }
+      )
+    }
+    if (newLayers.isNotEmpty()) session.layerStack.commit { it + newLayers }
+    onLayerStackChanged()
+  }
+
+  private fun createDrawSubBar(session: PhotoEditSession): LinearLayout {
+    val textColor = themeColor("textColor", DesignTokens.onSurface)
+    val primaryColor = themeColor("primaryColor", DesignTokens.primaryContainer)
+    val colors = listOf(Color.RED, Color.rgb(255, 214, 51), Color.rgb(76, 217, 100), Color.rgb(10, 132, 255), Color.WHITE, Color.BLACK)
+    return LinearLayout(this).apply {
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(dp(12), 0, dp(12), 0)
+      setBackgroundColor(themeColor("toolbarColor", DesignTokens.surfaceContainerLow))
+      addView(HorizontalScrollView(this@PhotoVideoEditorActivity).apply {
+        isHorizontalScrollBarEnabled = false
+        addView(LinearLayout(this@PhotoVideoEditorActivity).apply {
+          orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+          colors.forEach { color -> addView(createColorSwatch(color) { drawOverlay.strokeColor = color }, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(6) }) }
+          addView(actionButton("Thin") { drawOverlay.strokeWidthPx = dp(2).toFloat() }.apply { setTextColor(textColor) })
+          addView(actionButton("Thick") { drawOverlay.strokeWidthPx = dp(10).toFloat() }.apply { setTextColor(textColor) })
+          addView(actionButton("Undo") { drawOverlay.undoLastStroke() }.apply { setTextColor(textColor) })
+          addView(actionButton("Clear") { drawOverlay.clearStrokes() }.apply { setTextColor(textColor) })
+        })
+      }, LinearLayout.LayoutParams(0, MATCH, 1f))
+      addView(actionButton("Done") { setDrawMode(false, session) }.apply { setTextColor(primaryColor) }, LinearLayout.LayoutParams(dp(72), MATCH))
     }
   }
 
@@ -1105,6 +1181,7 @@ class PhotoVideoEditorActivity : Activity() {
   }
 
   private fun setCropMode(enabled: Boolean, session: PhotoEditSession, imageView: ZoomableImageView, overlay: CropOverlayView) {
+    if (enabled && !cropMode) cropEntryState = session.state
     cropMode = enabled
     imageView.panZoomEnabled = !enabled
     overlay.visibility = if (enabled) View.VISIBLE else View.GONE
@@ -1117,9 +1194,21 @@ class PhotoVideoEditorActivity : Activity() {
       val state = session.state
       val isIdentityCrop = state.cropLeft == 0f && state.cropTop == 0f && state.cropRight == 1f && state.cropBottom == 1f
       overlay.setImageBounds(imageView.currentImageBounds(), resetCrop = isIdentityCrop)
+      overlay.setCrop(state.cropLeft, state.cropTop, state.cropRight, state.cropBottom)
+      overlay.setAspectRatio(state.aspectRatio)
+    } else {
+      cropEntryState = null
     }
     refreshPhotoToolSelection()
     refreshSelection(cropAspectButtons, session.state.aspectRatio, themeColor("textColor", DesignTokens.onSurface), themeColor("primaryColor", DesignTokens.primaryContainer))
+  }
+
+  private fun cancelCropMode(session: PhotoEditSession, imageView: ZoomableImageView, overlay: CropOverlayView) {
+    cropEntryState?.let { snapshot -> session.update { snapshot } }
+    straightenSeekBar.progress = ((cropEntryState?.straightenDegrees ?: 0f) + 45f).roundToInt()
+    cropEntryState = null
+    schedulePhotoPreviewRender()
+    setCropMode(false, session, imageView, overlay)
   }
 
   private fun createCropSubBar(session: PhotoEditSession, imageView: ZoomableImageView, overlay: CropOverlayView): LinearLayout {
@@ -1168,6 +1257,10 @@ class PhotoVideoEditorActivity : Activity() {
       addView(LinearLayout(this@PhotoVideoEditorActivity).apply {
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(12), 0, dp(12), 0)
+        addView(
+          actionButton("Cancel") { cancelCropMode(session, imageView, overlay) }.apply { setTextColor(textColor) },
+          LinearLayout.LayoutParams(dp(72), MATCH)
+        )
         addView(HorizontalScrollView(this@PhotoVideoEditorActivity).apply {
           isHorizontalScrollBarEnabled = false
           addView(LinearLayout(this@PhotoVideoEditorActivity).apply {
@@ -1266,6 +1359,7 @@ class PhotoVideoEditorActivity : Activity() {
       finishWithError("Nothing to export.", "E_INTERNAL")
       return
     }
+    if (drawMode) setDrawMode(false, session)
     exportProgressView.visibility = View.VISIBLE
     val state = session.state
     val adjustments = session.adjustments
@@ -1379,11 +1473,20 @@ class PhotoVideoEditorActivity : Activity() {
     }
 
     val playPause = Button(this).apply {
-      text = "Play"
-      setTextColor(Color.WHITE)
+      text = ""
+      contentDescription = "Play video"
+      setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play, 0, 0, 0)
+      gravity = Gravity.CENTER
       setBackgroundColor(Color.TRANSPARENT)
       setOnClickListener {
-        if (session.player.isPlaying) session.player.pause() else session.player.play()
+        if (session.player.isPlaying) {
+          session.player.pause()
+        } else {
+          if (session.player.playbackState == Player.STATE_ENDED || session.globalPositionMs() >= session.durationMs - 50L) {
+            session.seekToGlobalMs(0)
+          }
+          session.player.play()
+        }
       }
     }
     playPauseButton = playPause
@@ -1433,14 +1536,16 @@ class PhotoVideoEditorActivity : Activity() {
       }
     }
     trimRangeView = trim
-    root.addView(trim, LinearLayout.LayoutParams(MATCH, dp(48)).apply { setMargins(dp(8), dp(4), dp(8), 0) })
+    // Single-video editor: keep the internal range initialized for export,
+    // but do not show the trim/clip timeline UI.
 
     val strip = LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
       setPadding(dp(8), dp(4), dp(8), dp(4))
     }
+    // Keep the internal container initialized for the single-clip session,
+    // but do not add the multi-clip strip/actions to the video editor UI.
     clipStripBar = strip
-    root.addView(strip, LinearLayout.LayoutParams(MATCH, WRAP))
 
     session.onClipsReady = {
       runOnUiThread {
@@ -1523,7 +1628,9 @@ class PhotoVideoEditorActivity : Activity() {
           positionSeekBar.progress = (session.globalPositionMs() * 1000 / session.durationMs).toInt().coerceIn(0, 1000)
           updateTimeLabel()
         }
-        playPauseButton.text = if (session.player.isPlaying) "Pause" else "Play"
+        val playing = session.player.isPlaying
+        playPauseButton.setCompoundDrawablesWithIntrinsicBounds(if (playing) R.drawable.ic_pause else R.drawable.ic_play, 0, 0, 0)
+        playPauseButton.contentDescription = if (playing) "Pause video" else "Play video"
         refreshVideoOverlayPreview(session)
         positionPollHandler.postDelayed(this, 250)
       }
@@ -1630,7 +1737,11 @@ class PhotoVideoEditorActivity : Activity() {
     videoLayerToolBar.visibility = if (visible) View.VISIBLE else View.GONE
     videoLayerPropertySeekBar.visibility = if (visible) View.VISIBLE else View.GONE
     videoToolBar.visibility = if (visible) View.GONE else View.VISIBLE
-    if (visible) syncVideoLayerPropertySeekBar(session)
+    if (visible) {
+      if (activeVideoLayerPropertyKey !in setOf("rotation", "opacity")) activeVideoLayerPropertyKey = "rotation"
+      syncVideoLayerPropertySeekBar(session)
+      refreshSelection(videoLayerPropertyButtons, activeVideoLayerPropertyKey, themeColor("textColor", DesignTokens.onSurface), themeColor("primaryColor", DesignTokens.primaryContainer))
+    }
   }
 
   private fun currentSelectedVideoLayer(session: VideoEditSession): PhotoLayer? =
@@ -1678,9 +1789,7 @@ class PhotoVideoEditorActivity : Activity() {
     val toolbarColor = themeColor("toolbarColor", DesignTokens.surfaceContainerLow)
     val textColor = themeColor("textColor", DesignTokens.onSurface)
     val primaryColor = themeColor("primaryColor", DesignTokens.primaryContainer)
-    val properties = listOf(
-      "scale" to "Scale", "rotation" to "Rotate", "opacity" to "Opacity", "start" to "Start", "end" to "End"
-    )
+    val properties = listOf("rotation" to "Rotate", "opacity" to "Opacity")
     return LinearLayout(this).apply {
       gravity = Gravity.CENTER_VERTICAL
       setPadding(dp(12), 0, dp(12), 0)
@@ -1748,13 +1857,8 @@ class PhotoVideoEditorActivity : Activity() {
 
       val features = request.optJSONObject("features")
       val tools = listOf(
-        Triple("cover", "Cover", R.drawable.ic_movie),
-        Triple("speed", "Speed 1x", R.drawable.ic_speed),
-        Triple("crop", "Crop", R.drawable.ic_crop),
-        Triple("filters", "Filters", R.drawable.ic_photo_filter),
         Triple("text", "Text", R.drawable.ic_title),
-        Triple("stickers", "Stickers", R.drawable.ic_sentiment_satisfied),
-        Triple("overlay", "Overlay", R.drawable.ic_wallpaper)
+        Triple("stickers", "Stickers", R.drawable.ic_sentiment_satisfied)
       )
       addView(HorizontalScrollView(this@PhotoVideoEditorActivity).apply {
         isHorizontalScrollBarEnabled = false
@@ -1810,45 +1914,21 @@ class PhotoVideoEditorActivity : Activity() {
   }
 
   private fun showVideoStickerPicker(session: VideoEditSession) {
-    val consumerAssets = request.optJSONArray("stickerAssets")
-    val builtin = PhotoLayerRenderer.builtinStickerIds()
-    val consumerCount = consumerAssets?.length() ?: 0
-    val features = request.optJSONObject("features")
-    val onlineStickersEnabled = features?.optBoolean("onlineStickers", true) != false
-    val labels = (
-      builtin.map { PhotoLayerRenderer.glyphFor(it) } +
-        (0 until consumerCount).map { i -> consumerAssets?.optJSONObject(i)?.optString("id", "asset$i") ?: "asset$i" } +
-        listOf("Upload from device") +
-        (if (onlineStickersEnabled) listOf("Browse online") else emptyList())
-      ).toTypedArray()
-    AlertDialog.Builder(this)
-      .setTitle("Add sticker")
-      .setItems(labels) { _, index ->
-        when {
-          index < builtin.size -> {
-            val layer = PhotoLayer(type = LayerType.STICKER, stickerId = builtin[index])
-            session.layerStack.commit { it + layer }
-            onVideoLayerStackChanged()
-            selectVideoLayer(layer.id, session)
-          }
-          index < builtin.size + consumerCount -> {
-            val asset = consumerAssets?.optJSONObject(index - builtin.size)
-            val uri = asset?.optString("uri").takeUnless { it.isNullOrBlank() } ?: return@setItems
-            val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = uri)
-            session.layerStack.commit { it + layer }
-            onVideoLayerStackChanged()
-            selectVideoLayer(layer.id, session)
-          }
-          index == builtin.size + consumerCount -> launchOverlayPicker(REQUEST_CODE_VIDEO_STICKER_UPLOAD)
-          else -> OnlineStickerSheet(this) { path ->
-            val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = Uri.fromFile(File(path)).toString())
-            session.layerStack.commit { it + layer }
-            onVideoLayerStackChanged()
-            selectVideoLayer(layer.id, session)
-          }.show()
-        }
-      }
-      .show()
+    OnlineStickerSheet(this, runtimeStickerAssets()) { path ->
+      val layer = PhotoLayer(type = LayerType.STICKER, stickerUri = Uri.fromFile(File(path)).toString())
+      session.layerStack.commit { it + layer }
+      onVideoLayerStackChanged()
+      selectVideoLayer(layer.id, session)
+    }.show()
+  }
+
+  private fun runtimeStickerAssets(): List<RuntimeSticker> {
+    val assets = request.optJSONArray("stickerAssets") ?: return emptyList()
+    return (0 until assets.length()).mapNotNull { index ->
+      val asset = assets.optJSONObject(index) ?: return@mapNotNull null
+      val uri = asset.optString("uri").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+      RuntimeSticker(asset.optString("id").takeIf { it.isNotBlank() } ?: "sticker-${index + 1}", uri)
+    }
   }
 
   private fun formatSpeedLabel(speed: Float): String {

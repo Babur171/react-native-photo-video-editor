@@ -1,4 +1,5 @@
 {
+  "exclude": ["react-native-photo-editor-master"],
   "compilerOptions": {
     "rootDir": ".",
     "paths": {

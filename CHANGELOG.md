@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.1
+
+- Add bundled offline sticker libraries and custom searchable bottom sheets on Android and iOS.
+- Support consumer-provided runtime stickers from HTTPS URLs and device URIs for photo and video layers.
+- Add freehand drawing plus movable, pinch-scalable, rotatable text and sticker layers.
+- Improve crop controls and remove unused photo tools.
+- Simplify the video editor to Text and Stickers, remove clip/trim UI, improve replay behavior, and add play/pause icons.
+- Remove the third-party OpenMoji catalog/API integration.
+
 - Adopt the "Studio Violet" design system exported from Stitch (`stitch_react_native_photo_editor_sdk/`) for the photo editor shell and every existing tool: new color/spacing/radius tokens (`DesignTokens.kt`/`DesignTokens.swift`), a real Material Symbols icon set (46 icons fetched from source SVGs and converted to Android vector drawables; SF Symbols on iOS), an icon-tile main tool rail (expanded to the full 16-tool set from the mockup: Crop/Adjust/Filters/Effects/Blur/Text/Stickers/Shapes/Draw/Frames/Overlays/Background/Retouch/Remove/Layers/Resize), a circular-close/pill-Export header, Rotate/Flip moved into the Crop sub-bar, Adjust and Filters split into separate tools (previously combined), real per-preset thumbnail cards for Filters, a card grid for Stickers/Shapes, color-swatch controls for Draw, icon actions for the Layer property bar, and Color/Size properties for text layers. Android is Gradle-verified end to end (`compileDebugKotlin`, `assembleDebug` for the library and example app); iOS mirrors the header, tool rail, and Crop sub-bar but is unbuilt (no macOS/Xcode here) — the remaining tool sub-bars (Filters cards, Stickers/Shapes grid, Draw, Layers, Text) are visually unchanged on iOS for now. Toolbar entries with no mockup-independent functionality yet (Effects, Frames, Overlays, Background, Retouch) still show "coming in a later milestone".
 - Add two new photo tools shown in the mockups but not previously implemented: **Blur & Depth** (synthetic Radial/Linear tilt-shift blur via `RadialGradient`/`LinearGradient` + `PorterDuff.DST_IN` alpha-mask compositing — no ML/device depth sensing, since that's unverifiable without a device, so the mockup's ML-driven "Portrait" mode is intentionally out of scope) and **Canvas Resize & Social Presets** (IG Post/Story/Square, YouTube, Twitter presets, reusing the existing crop-aspect-ratio mechanism plus an exact export pixel-size override). Both are Android-only so far, Gradle-verified, wired into both preview and export. AI Object Removal / Magic Eraser was explicitly excluded from this pass per instruction.
 - Add focused photo/video editor APIs, native full-screen preview shells, feature-aware toolbars, typed editor events, and the versioned project model foundation.

@@ -3,6 +3,7 @@ package com.photovideoeditor.photo.render
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.text.TextPaint
 
@@ -41,6 +42,7 @@ object PhotoLayerRenderer {
         LayerType.TEXT -> drawText(canvas, layer, geometry.shortSide, alpha)
         LayerType.STICKER -> drawSticker(canvas, layer, geometry.shortSide, alpha, bitmapResolver)
         LayerType.OVERLAY -> drawOverlay(canvas, layer, geometry.shortSide, alpha, bitmapResolver)
+        LayerType.DRAWING -> drawStroke(canvas, layer, result.width.toFloat(), result.height.toFloat(), geometry.shortSide, alpha)
       }
       canvas.restore()
     }
@@ -104,5 +106,24 @@ object PhotoLayerRenderer {
     }
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.alpha = alpha }
     canvas.drawBitmap(bitmap, null, RectF(-width / 2, -height / 2, width / 2, height / 2), paint)
+  }
+
+  private fun drawStroke(canvas: Canvas, layer: PhotoLayer, width: Float, height: Float, shortSide: Float, alpha: Int) {
+    if (layer.drawPoints.size < 2) return
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      color = layer.drawColor
+      this.alpha = alpha
+      style = Paint.Style.STROKE
+      strokeWidth = layer.drawStrokeWidth * shortSide
+      strokeCap = Paint.Cap.ROUND
+      strokeJoin = Paint.Join.ROUND
+    }
+    val path = Path()
+    layer.drawPoints.forEachIndexed { index, (dx, dy) ->
+      val px = dx * width
+      val py = dy * height
+      if (index == 0) path.moveTo(px, py) else path.lineTo(px, py)
+    }
+    canvas.drawPath(path, paint)
   }
 }

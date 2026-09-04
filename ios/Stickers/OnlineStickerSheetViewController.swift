@@ -1,49 +1,42 @@
 import UIKit
 
-/// Bottom sheet: search + category filter + a 4-column grid of OpenMoji stickers. Tapping one
-/// downloads the full-res PNG, writes it to a temp file, and hands `(URL, UIImage)` back to
+/// Bottom sheet: search + category filter + a 5-column grid of bundled stickers. Tapping one
+/// writes the PNG to a temp file and hands `(URL, UIImage)` back to
 /// `onStickerPicked` — the caller feeds that straight into the existing
 /// `handlePickedImage(_:image:purpose:)` insertion path (photo sticker chip / video sticker
 /// action sheet), so this file has zero knowledge of `PhotoLayer`/session internals.
 ///
 /// Built entirely in code (no storyboard/xib), consistent with the rest of this codebase.
 final class OnlineStickerSheetViewController: UIViewController {
-  /// Fired once, after the full-res download completes and the image is written to a temp file.
+  struct RuntimeSticker { let id: String; let uri: String }
+  /// Fired once after the bundled image is written to a temp file.
   /// The sheet dismisses itself first, then invokes this closure.
   var onStickerPicked: ((URL, UIImage) -> Void)?
+  var onDismiss: (() -> Void)?
+  private var didNotifyDismiss = false
 
-  private let catalog = OpenMojiCatalog.shared
-  private let loader = RemoteImageLoader.shared
-
-  private enum LoadState {
-    case loading, loaded, error(String)
-  }
-
-  private var loadState: LoadState = .loading
-  private var allEntries: [OpenMojiEntry] = []
-  private var displayedEntries: [OpenMojiEntry] = []
+  private var localStickerNames: [String] = []
+  private var displayedLocalStickerNames: [String] = []
+  private let runtimeStickers: [RuntimeSticker]
+  private var displayedRuntimeStickers: [RuntimeSticker] = []
   private var selectedGroup: String?  // nil == "All"
   private var searchQuery: String = ""
   private var searchDebounceTimer: Timer?
-  private var downloadInFlightHexcode: String?
 
   private let searchBar = UISearchBar()
   private let categoryScroll = UIScrollView()
   private let categoryStack = UIStackView()
   private var categoryButtons: [String: UIButton] = [:]  // key "" == All
   private let collectionView: UICollectionView
-  private let spinner = UIActivityIndicatorView(style: .large)
   private let emptyLabel = UILabel()
-  private let errorLabel = UILabel()
-  private let retryButton = UIButton(type: .system)
-  private let attributionLabel = UILabel()
   private let stateContainer = UIView()
 
-  private static let cellReuseID = "OpenMojiCell"
-  private static let columns = 4
-  private static let cellSpacing: CGFloat = 8
+  private static let cellReuseID = "BundledStickerCell"
+  private static let columns = 5
+  private static let cellSpacing: CGFloat = 6
 
-  init() {
+  init(runtimeStickers: [RuntimeSticker] = []) {
+    self.runtimeStickers = runtimeStickers
     let layout = UICollectionViewFlowLayout()
     layout.minimumInteritemSpacing = Self.cellSpacing
     layout.minimumLineSpacing = Self.cellSpacing
@@ -56,9 +49,16 @@ final class OnlineStickerSheetViewController: UIViewController {
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    view.backgroundColor = DesignTokens.surfaceContainerLowest
+    view.backgroundColor = DesignTokens.elevatedPanel
     buildUI()
-    loadCatalog()
+    loadLocalStickers()
+  }
+
+  override func viewDidDisappear(_ animated: Bool) {
+    super.viewDidDisappear(animated)
+    guard (isBeingDismissed || presentingViewController == nil), !didNotifyDismiss else { return }
+    didNotifyDismiss = true
+    onDismiss?()
   }
 
   // MARK: - UI construction
@@ -86,9 +86,7 @@ final class OnlineStickerSheetViewController: UIViewController {
     collectionView.backgroundColor = .clear
     collectionView.dataSource = self
     collectionView.delegate = self
-    collectionView.register(OpenMojiCell.self, forCellWithReuseIdentifier: Self.cellReuseID)
-
-    spinner.hidesWhenStopped = true
+    collectionView.register(BundledStickerCell.self, forCellWithReuseIdentifier: Self.cellReuseID)
 
     emptyLabel.text = "No stickers found."
     emptyLabel.textColor = DesignTokens.onSurfaceVariant
@@ -96,19 +94,7 @@ final class OnlineStickerSheetViewController: UIViewController {
     emptyLabel.font = .systemFont(ofSize: 14)
     emptyLabel.isHidden = true
 
-    errorLabel.text = "Couldn't load stickers — check your connection."
-    errorLabel.textColor = DesignTokens.onSurfaceVariant
-    errorLabel.textAlignment = .center
-    errorLabel.font = .systemFont(ofSize: 14)
-    errorLabel.numberOfLines = 0
-    errorLabel.isHidden = true
-
-    retryButton.setTitle("Retry", for: .normal)
-    retryButton.setTitleColor(DesignTokens.primaryContainer, for: .normal)
-    retryButton.isHidden = true
-    retryButton.addAction(UIAction { [weak self] _ in self?.loadCatalog(forceRefresh: true) }, for: .touchUpInside)
-
-    let stateStack = UIStackView(arrangedSubviews: [spinner, emptyLabel, errorLabel, retryButton])
+    let stateStack = UIStackView(arrangedSubviews: [emptyLabel])
     stateStack.axis = .vertical
     stateStack.alignment = .center
     stateStack.spacing = 12
@@ -121,14 +107,9 @@ final class OnlineStickerSheetViewController: UIViewController {
       stateStack.trailingAnchor.constraint(lessThanOrEqualTo: stateContainer.trailingAnchor, constant: -24),
     ])
 
-    attributionLabel.text = "Stickers by OpenMoji (CC BY-SA 4.0)"
-    attributionLabel.font = .systemFont(ofSize: 11)
-    attributionLabel.textColor = DesignTokens.outline
-    attributionLabel.textAlignment = .center
-
     // stateContainer (spinner/empty/error) overlays the collection view's area rather than
     // sharing stack space, since it's shown/hidden independently of the grid's own layout.
-    let root = UIStackView(arrangedSubviews: [searchBar, categoryScroll, collectionView, attributionLabel])
+    let root = UIStackView(arrangedSubviews: [searchBar, categoryScroll, collectionView])
     root.axis = .vertical
     root.translatesAutoresizingMaskIntoConstraints = false
 
@@ -142,8 +123,6 @@ final class OnlineStickerSheetViewController: UIViewController {
       root.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
       root.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8),
       categoryScroll.heightAnchor.constraint(equalToConstant: 40),
-      attributionLabel.heightAnchor.constraint(equalToConstant: 20),
-
       stateContainer.leadingAnchor.constraint(equalTo: collectionView.leadingAnchor),
       stateContainer.trailingAnchor.constraint(equalTo: collectionView.trailingAnchor),
       stateContainer.topAnchor.constraint(equalTo: collectionView.topAnchor),
@@ -155,7 +134,9 @@ final class OnlineStickerSheetViewController: UIViewController {
     categoryStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
     categoryButtons.removeAll()
 
-    let all = [("", "All")] + catalog.groups().map { ($0, Self.displayName(for: $0)) }
+    let localGroups = Set(localStickerNames.compactMap { $0.split(separator: "_").first.map { "local:" + $0.lowercased() } }).sorted()
+    let runtimeGroups = runtimeStickers.isEmpty ? [] : [("runtime", "My stickers")]
+    let all = [("", "All")] + runtimeGroups + localGroups.map { ($0, Self.displayName(for: $0.replacingOccurrences(of: "local:", with: ""))) }
     all.forEach { key, title in
       let chip = makeChip(title: title) { [weak self] in self?.selectCategory(key) }
       categoryButtons[key] = chip
@@ -200,47 +181,22 @@ final class OnlineStickerSheetViewController: UIViewController {
     }
   }
 
-  // MARK: - Loading
-
-  private func loadCatalog(forceRefresh: Bool = false) {
-    setLoadState(.loading)
-    catalog.load { [weak self] entries, error in
-      guard let self else { return }
-      if let entries {
-        self.allEntries = entries
-        self.rebuildCategoryChips()
-        self.applyFilter()
-        self.setLoadState(.loaded)
-      } else {
-        self.setLoadState(.error((error as NSError?)?.localizedDescription ?? "Couldn't load stickers — check your connection."))
-      }
-    }
+  private func loadLocalStickers() {
+    let hostBundle = Bundle(for: OnlineStickerSheetViewController.self)
+    let bundleURL = Bundle.main.url(forResource: "PhotoVideoEditorStickers", withExtension: "bundle")
+      ?? hostBundle.url(forResource: "PhotoVideoEditorStickers", withExtension: "bundle")
+    guard let bundleURL, let bundle = Bundle(url: bundleURL) else { return }
+    localStickerNames = (bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []).map(\.lastPathComponent).sorted()
+    displayedLocalStickerNames = localStickerNames
+    rebuildCategoryChips()
+    applyFilter()
   }
 
-  private func setLoadState(_ state: LoadState) {
-    loadState = state
-    switch state {
-    case .loading:
-      stateContainer.isHidden = false
-      spinner.startAnimating()
-      emptyLabel.isHidden = true
-      errorLabel.isHidden = true
-      retryButton.isHidden = true
-    case .loaded:
-      spinner.stopAnimating()
-      let isEmpty = displayedEntries.isEmpty
-      stateContainer.isHidden = !isEmpty
-      emptyLabel.isHidden = !isEmpty
-      errorLabel.isHidden = true
-      retryButton.isHidden = true
-    case .error(let message):
-      spinner.stopAnimating()
-      stateContainer.isHidden = false
-      emptyLabel.isHidden = true
-      errorLabel.isHidden = false
-      errorLabel.text = message
-      retryButton.isHidden = false
-    }
+  private func localStickerURL(named name: String) -> URL? {
+    let hostBundle = Bundle(for: OnlineStickerSheetViewController.self)
+    let bundleURL = Bundle.main.url(forResource: "PhotoVideoEditorStickers", withExtension: "bundle")
+      ?? hostBundle.url(forResource: "PhotoVideoEditorStickers", withExtension: "bundle")
+    return bundleURL.flatMap(Bundle.init(url:))?.url(forResource: (name as NSString).deletingPathExtension, withExtension: "png")
   }
 
   // MARK: - Filtering
@@ -254,47 +210,19 @@ final class OnlineStickerSheetViewController: UIViewController {
   /// Search takes precedence over category when non-empty; otherwise filter by selected
   /// category, with "All" (nil) meaning no filter.
   private func applyFilter() {
-    if !searchQuery.isEmpty {
-      displayedEntries = catalog.search(searchQuery)
-    } else if let selectedGroup {
-      displayedEntries = catalog.byGroup(selectedGroup)
-    } else {
-      displayedEntries = allEntries
+    let normalizedQuery = searchQuery.lowercased()
+    displayedLocalStickerNames = localStickerNames.filter { name in
+      let matchesQuery = normalizedQuery.isEmpty || name.lowercased().contains(normalizedQuery)
+      let matchesGroup = selectedGroup == nil || (selectedGroup?.hasPrefix("local:") == true && name.lowercased().hasPrefix(selectedGroup!.replacingOccurrences(of: "local:", with: "")))
+      return matchesQuery && matchesGroup
+    }
+    displayedRuntimeStickers = runtimeStickers.filter { sticker in
+      (selectedGroup == nil || selectedGroup == "runtime") && (normalizedQuery.isEmpty || sticker.id.lowercased().contains(normalizedQuery))
     }
     collectionView.reloadData()
-    if case .loaded = loadState { setLoadState(.loaded) }
-  }
-
-  // MARK: - Sticker selection / download
-
-  private func stickerTapped(_ entry: OpenMojiEntry, at indexPath: IndexPath) {
-    guard downloadInFlightHexcode == nil else { return }
-    downloadInFlightHexcode = entry.hexcode
-    if let cell = collectionView.cellForItem(at: indexPath) as? OpenMojiCell {
-      cell.setDownloading(true)
-    }
-    let url = catalog.fullURL(entry.hexcode)
-    loader.downloadFull(url: url) { [weak self] fileURL, error in
-      guard let self else { return }
-      self.downloadInFlightHexcode = nil
-      if let cell = self.collectionView.cellForItem(at: indexPath) as? OpenMojiCell {
-        cell.setDownloading(false)
-      }
-      guard let fileURL, let data = try? Data(contentsOf: fileURL), let image = UIImage(data: data) else {
-        self.showInlineDownloadError()
-        return
-      }
-      // Write to a fresh temp file (consistent with the "Upload" flow's `writeTempImage`) so the
-      // caller always receives a `file://` URL it can treat like any other picked image, decoupled
-      // from our own disk cache's lifetime.
-      guard let tempURL = self.writeTempImage(image) else {
-        self.showInlineDownloadError()
-        return
-      }
-      self.dismiss(animated: true) { [weak self] in
-        self?.onStickerPicked?(tempURL, image)
-      }
-    }
+    let isEmpty = displayedLocalStickerNames.isEmpty && displayedRuntimeStickers.isEmpty
+    stateContainer.isHidden = !isEmpty
+    emptyLabel.isHidden = !isEmpty
   }
 
   private func writeTempImage(_ image: UIImage) -> URL? {
@@ -308,11 +236,26 @@ final class OnlineStickerSheetViewController: UIViewController {
     }
   }
 
-  private func showInlineDownloadError() {
-    let alert = UIAlertController(title: "Download failed", message: "Couldn't download that sticker. Please try again.", preferredStyle: .alert)
-    alert.addAction(UIAlertAction(title: "OK", style: .default))
-    present(alert, animated: true)
+  private func loadRuntimeSticker(_ sticker: RuntimeSticker, completion: @escaping (URL?, UIImage?) -> Void) {
+    if !sticker.uri.lowercased().hasPrefix("https://") {
+      guard let path = SourceResolver.resolvePath(sourceUri: sticker.uri, tempPrefix: "pve_runtime_sticker") else {
+        completion(nil, nil)
+        return
+      }
+      let localURL = URL(fileURLWithPath: path)
+      completion(localURL, UIImage(contentsOfFile: path))
+      return
+    }
+    guard let url = URL(string: sticker.uri) else { completion(nil, nil); return }
+    URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+      guard let self, let data, let image = UIImage(data: data), let localURL = self.writeTempImage(image) else {
+        DispatchQueue.main.async { completion(nil, nil) }
+        return
+      }
+      DispatchQueue.main.async { completion(localURL, image) }
+    }.resume()
   }
+
 }
 
 // MARK: - UISearchBarDelegate (debounced)
@@ -344,20 +287,38 @@ extension OnlineStickerSheetViewController: UISearchBarDelegate {
 
 extension OnlineStickerSheetViewController: UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout {
   func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-    displayedEntries.count
+    displayedRuntimeStickers.count + displayedLocalStickerNames.count
   }
 
   func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-    let cell = collectionView.dequeueReusableCell(withReuseIdentifier: Self.cellReuseID, for: indexPath) as! OpenMojiCell
-    let entry = displayedEntries[indexPath.item]
-    cell.configure(url: catalog.thumbnailURL(entry.hexcode), loader: loader)
+    let cell = collectionView.dequeueReusableCell(withReuseIdentifier: Self.cellReuseID, for: indexPath) as! BundledStickerCell
+    if indexPath.item < displayedRuntimeStickers.count {
+      let sticker = displayedRuntimeStickers[indexPath.item]
+      cell.configure(image: nil)
+      loadRuntimeSticker(sticker) { [weak collectionView] _, image in
+        guard collectionView?.indexPath(for: cell) == indexPath else { return }
+        cell.configure(image: image)
+      }
+    } else {
+      let name = displayedLocalStickerNames[indexPath.item - displayedRuntimeStickers.count]
+      let image = localStickerURL(named: name).flatMap { UIImage(contentsOfFile: $0.path) }
+      cell.configure(image: image)
+    }
     return cell
   }
 
   func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
     collectionView.deselectItem(at: indexPath, animated: true)
-    guard indexPath.item < displayedEntries.count else { return }
-    stickerTapped(displayedEntries[indexPath.item], at: indexPath)
+    if indexPath.item < displayedRuntimeStickers.count {
+      loadRuntimeSticker(displayedRuntimeStickers[indexPath.item]) { [weak self] url, image in
+        guard let self, let url, let image else { return }
+        self.dismiss(animated: true) { [weak self] in self?.onStickerPicked?(url, image) }
+      }
+    } else {
+      let name = displayedLocalStickerNames[indexPath.item - displayedRuntimeStickers.count]
+      guard let url = localStickerURL(named: name), let image = UIImage(contentsOfFile: url.path), let tempURL = writeTempImage(image) else { return }
+      dismiss(animated: true) { [weak self] in self?.onStickerPicked?(tempURL, image) }
+    }
   }
 
   func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
@@ -367,15 +328,13 @@ extension OnlineStickerSheetViewController: UICollectionViewDataSource, UICollec
   }
 }
 
-/// One grid cell: a thumbnail image view plus a small overlay spinner shown while its full-res
-/// download is in flight.
-private final class OpenMojiCell: UICollectionViewCell {
+/// One grid cell for a bundled sticker image.
+private final class BundledStickerCell: UICollectionViewCell {
   private let imageView = UIImageView()
-  private let spinner = UIActivityIndicatorView(style: .medium)
 
   override init(frame: CGRect) {
     super.init(frame: frame)
-    contentView.backgroundColor = DesignTokens.surfaceContainerHigh
+    contentView.backgroundColor = DesignTokens.surfaceContainerLow
     contentView.layer.cornerRadius = DesignTokens.radiusMd
     contentView.clipsToBounds = true
 
@@ -389,30 +348,14 @@ private final class OpenMojiCell: UICollectionViewCell {
       imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4),
     ])
 
-    spinner.hidesWhenStopped = true
-    contentView.addSubview(spinner)
-    spinner.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-      spinner.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-      spinner.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-    ])
   }
 
   required init?(coder: NSCoder) { nil }
 
-  func configure(url: URL, loader: RemoteImageLoader) {
-    loader.loadThumbnail(url: url, into: imageView)
-  }
-
-  func setDownloading(_ downloading: Bool) {
-    if downloading { spinner.startAnimating() } else { spinner.stopAnimating() }
-    imageView.alpha = downloading ? 0.4 : 1.0
-  }
+  func configure(image: UIImage?) { imageView.image = image }
 
   override func prepareForReuse() {
     super.prepareForReuse()
     imageView.image = nil
-    spinner.stopAnimating()
-    imageView.alpha = 1.0
   }
 }

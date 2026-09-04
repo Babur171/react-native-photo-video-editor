@@ -12,10 +12,11 @@ final class CropOverlayView: UIView {
 
   private let dimLayer = CAShapeLayer()
   private let borderLayer = CAShapeLayer()
+  private let handlesLayer = CAShapeLayer()
   private let handleRadius: CGFloat = 32
   private let minSize: CGFloat = 60
 
-  private enum Handle { case move, topLeft, topRight, bottomLeft, bottomRight }
+  private enum Handle { case move, top, right, bottom, left, topLeft, topRight, bottomLeft, bottomRight }
   private var activeHandle: Handle?
   private var lastPoint: CGPoint = .zero
 
@@ -29,6 +30,8 @@ final class CropOverlayView: UIView {
     borderLayer.fillColor = UIColor.clear.cgColor
     borderLayer.lineWidth = 2
     layer.addSublayer(borderLayer)
+    handlesLayer.fillColor = UIColor.white.cgColor
+    layer.addSublayer(handlesLayer)
   }
 
   required init?(coder: NSCoder) { nil }
@@ -41,6 +44,18 @@ final class CropOverlayView: UIView {
       reportCrop()
     }
     setNeedsLayout()
+  }
+
+  /// Restores a normalized crop rectangle, used when reopening or cancelling crop mode.
+  func setCrop(left: CGFloat, top: CGFloat, right: CGFloat, bottom: CGFloat) {
+    guard imageBounds.width > 0, imageBounds.height > 0 else { return }
+    cropRect = CGRect(
+      x: imageBounds.minX + left * imageBounds.width,
+      y: imageBounds.minY + top * imageBounds.height,
+      width: (right - left) * imageBounds.width,
+      height: (bottom - top) * imageBounds.height
+    )
+    clampToImageBounds(); setNeedsLayout()
   }
 
   func setAspectRatio(_ ratio: CGFloat?) {
@@ -79,6 +94,16 @@ final class CropOverlayView: UIView {
       borderPath.addLine(to: CGPoint(x: cropRect.maxX, y: y))
     }
     borderLayer.path = borderPath.cgPath
+
+    let handlesPath = UIBezierPath()
+    let points = [
+      CGPoint(x: cropRect.minX, y: cropRect.minY), CGPoint(x: cropRect.midX, y: cropRect.minY),
+      CGPoint(x: cropRect.maxX, y: cropRect.minY), CGPoint(x: cropRect.maxX, y: cropRect.midY),
+      CGPoint(x: cropRect.maxX, y: cropRect.maxY), CGPoint(x: cropRect.midX, y: cropRect.maxY),
+      CGPoint(x: cropRect.minX, y: cropRect.maxY), CGPoint(x: cropRect.minX, y: cropRect.midY),
+    ]
+    points.forEach { point in handlesPath.append(UIBezierPath(ovalIn: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))) }
+    handlesLayer.path = handlesPath.cgPath
   }
 
   override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -108,6 +133,10 @@ final class CropOverlayView: UIView {
     if near(CGPoint(x: cropRect.maxX, y: cropRect.minY)) { return .topRight }
     if near(CGPoint(x: cropRect.minX, y: cropRect.maxY)) { return .bottomLeft }
     if near(CGPoint(x: cropRect.maxX, y: cropRect.maxY)) { return .bottomRight }
+    if near(CGPoint(x: cropRect.midX, y: cropRect.minY)) { return .top }
+    if near(CGPoint(x: cropRect.maxX, y: cropRect.midY)) { return .right }
+    if near(CGPoint(x: cropRect.midX, y: cropRect.maxY)) { return .bottom }
+    if near(CGPoint(x: cropRect.minX, y: cropRect.midY)) { return .left }
     if cropRect.contains(point) { return .move }
     return nil
   }
@@ -125,6 +154,10 @@ final class CropOverlayView: UIView {
       rect = CGRect(x: rect.minX + dx, y: rect.minY, width: rect.width - dx, height: rect.height + dy)
     case .bottomRight:
       rect = CGRect(x: rect.minX, y: rect.minY, width: rect.width + dx, height: rect.height + dy)
+    case .top: rect = CGRect(x: rect.minX, y: rect.minY + dy, width: rect.width, height: rect.height - dy)
+    case .right: rect.size.width += dx
+    case .bottom: rect.size.height += dy
+    case .left: rect = CGRect(x: rect.minX + dx, y: rect.minY, width: rect.width - dx, height: rect.height)
     }
     guard rect.width >= minSize, rect.height >= minSize else { return }
     if let ratio = aspectRatio {
@@ -137,6 +170,10 @@ final class CropOverlayView: UIView {
         rect.size.height = newHeight
       case .move:
         break
+      case .left, .right:
+        let centerY = cropRect.midY; rect.size.height = rect.width / ratio; rect.origin.y = centerY - rect.height / 2
+      case .top, .bottom:
+        let centerX = cropRect.midX; rect.size.width = rect.height * ratio; rect.origin.x = centerX - rect.width / 2
       }
     }
     cropRect = rect

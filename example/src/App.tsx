@@ -79,7 +79,18 @@ export default function App() {
       setResult(
         selectedAsset.type?.startsWith('video/')
           ? await openVideoEditor({ source: { ...source, type: 'video' } })
-          : await openPhotoEditor({ source: { ...source, type: 'photo' } })
+          : await openPhotoEditor({
+              source: { ...source, type: 'photo' },
+              features: {
+                crop: true,
+                rotate: true,
+                filters: true,
+                text: true,
+                stickers: true,
+                overlays: false,
+                draw: true,
+              },
+            })
       );
     } catch (cause) {
       const value =
@@ -98,7 +109,8 @@ export default function App() {
           Photo Video Editor
         </Text>
         <Text style={styles.subtitle}>
-          Select media and open the native Android editor.
+          Select a photo to try text, stickers, pinch/rotate, and freehand
+          drawing in the native editor.
         </Text>
         <View style={styles.status}>
           <Text style={styles.statusText}>Platform: {Platform.OS}</Text>
@@ -146,8 +158,8 @@ export default function App() {
           </ActionButton>
         )}
         <Text style={styles.note}>
-          Choose a real image or video. Tap Done in the full-screen editor to
-          return the selected media, or Cancel to close it.
+          Photo tools: Text, Stickers, and Draw. Sticker layers can be moved,
+          pinched, and rotated. Tap Done to export or Cancel to close.
         </Text>
       </ScrollView>
     </SafeAreaView>

@@ -31,8 +31,8 @@ export interface EditorFeatures {
   /** Enables filters. */ filters?: boolean;
   /** Enables text overlays. */ text?: boolean;
   /** Enables stickers (built-in, consumer-supplied, and user-uploaded). */ stickers?: boolean;
+  /** Enables freehand drawing with configurable brush colors and widths. */ draw?: boolean;
   /** Enables the user-uploaded image overlay tool. */ overlays?: boolean;
-  /** Enables browsing/downloading free stickers from the internet (OpenMoji). Disable to prevent any network calls. */ onlineStickers?: boolean;
 }
 /** Future native editor appearance options. */
 export interface EditorTheme {
@@ -61,7 +61,7 @@ export interface FontAsset {
 /** A consumer-provided sticker image, selectable from the Stickers tool. */
 export interface StickerAsset {
   /** Stable identifier, echoed back on layers created from this asset. */ id: string;
-  /** Local file/content URI of the sticker image. */ uri: string;
+  /** Sticker image URI. Supports HTTPS URLs and local device file/content URIs. */ uri: string;
 }
 /** Options accepted by {@link openEditor}. */
 export interface EditorOptions {

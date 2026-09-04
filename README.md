@@ -2,7 +2,7 @@
 
 > Early development: Milestone 6 is complete on Android and nearly complete on iOS, and Milestone 7's multi-clip timeline slice (clip list, split/duplicate/delete/reorder, gapless multi-clip export) is now complete on both platforms — audio tracks and transitions are deliberately deferred to a later slice. Android is compile-verified via Gradle throughout, including live-resolved Media3 dependencies, a time-aware `OverlayEffect` export path, the `Brightness`/`Contrast`/`HslAdjustment` filter export path, and multi-clip export via `EditedMediaItemSequence`/`Composition` (all verified against actual library bytecode, not guessed); iOS implements the same editing UI via AVFoundation but is unbuilt (no macOS toolchain here), uses a simpler `AVMutableComposition`-based approach for multi-clip preview/export, and its overlay export still burns overlays in for the whole clip regardless of their configured time range — the one remaining Milestone 6 gap, needing a custom `AVVideoCompositing` implementation to fix. Video aspect-ratio crop, video-level filters, and export-time speed change are Android-only/not-yet-implemented, each a documented, deliberate scope cut rather than an oversight.
 
-A React Native Android/iOS Turbo Module with focused `openPhotoEditor`, `openVideoEditor`, and unified `openEditor` APIs. The full-screen native shell previews local media, honors feature visibility and theme, edits photos on-device (crop/rotate/straighten, adjustments/filters, and text layers) and video on-device (trim/rotate/speed/text/filters/export), and returns a typed result with real output metadata on Done or a typed cancellation result on Cancel. See [docs/photo-editor.md](docs/photo-editor.md) and [docs/video-editor.md](docs/video-editor.md) for details.
+A React Native Android/iOS Turbo Module with focused `openPhotoEditor`, `openVideoEditor`, and unified `openEditor` APIs. The full-screen native shell previews local media, honors feature visibility and theme, edits photos on-device (crop/rotate/straighten, adjustments/filters, text, images/stickers, pinch/rotate transforms, and freehand drawing) and video on-device (trim/rotate/speed/text/filters/export), and returns a typed result with real output metadata on Done or a typed cancellation result on Cancel. See [docs/photo-editor.md](docs/photo-editor.md) and [docs/video-editor.md](docs/video-editor.md) for details.
 
 ## Requirements and installation
 
@@ -21,7 +21,7 @@ No permissions are required by the placeholder. Future gallery saving will requi
 
 ```ts
 import {
-  openVideoEditor,
+  openPhotoEditor,
   cancelExport,
   addExportProgressListener,
   PhotoVideoEditorError,
@@ -32,10 +32,14 @@ const subscription = addExportProgressListener((event) => {
 });
 
 try {
-  const result = await openVideoEditor({
-    source: { uri: 'file:///path/to/video.mp4', type: 'video' },
-    features: { crop: true, rotate: true, trim: true },
-    export: { quality: 'high', videoFormat: 'mp4', frameRate: 30 },
+  const result = await openPhotoEditor({
+    source: { uri: 'file:///path/to/photo.jpg', type: 'photo' },
+    features: { crop: true, rotate: true, text: true, stickers: true, draw: true },
+    stickerAssets: [
+      { id: 'brand', uri: 'https://example.com/brand-sticker.png' },
+      { id: 'device-sticker', uri: 'file:///path/to/sticker.png' },
+    ],
+    export: { quality: 'high', imageFormat: 'png' },
     saveToGallery: false,
   });
   console.log(result.uri, result.cancelled);

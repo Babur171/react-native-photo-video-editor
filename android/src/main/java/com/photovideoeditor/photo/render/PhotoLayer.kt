@@ -3,7 +3,7 @@ package com.photovideoeditor.photo.render
 import android.graphics.Color
 import java.util.UUID
 
-enum class LayerType { TEXT, STICKER, OVERLAY }
+enum class LayerType { TEXT, STICKER, OVERLAY, DRAWING }
 
 /**
  * A single non-destructive overlay layer (text, sticker, or uploaded image
@@ -33,6 +33,10 @@ data class PhotoLayer(
   // Overlay (uploaded image)
   var overlayUri: String? = null,
   var overlayAspectRatio: Float? = null,
+  // Drawing (points are normalized offsets from x/y)
+  var drawColor: Int = Color.RED,
+  var drawStrokeWidth: Float = 0.012f,
+  var drawPoints: List<Pair<Float, Float>> = emptyList(),
   // Timing (video overlays only; ignored for photo layers). endMs <= 0 means "to end of video".
   var startMs: Long = 0L,
   var endMs: Long = 0L

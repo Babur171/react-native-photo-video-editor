@@ -28,8 +28,8 @@ const defaultFeatures = {
   filters: true,
   text: true,
   stickers: true,
+  draw: true,
   overlays: true,
-  onlineStickers: true,
 };
 
 function invalid(message: string): never {

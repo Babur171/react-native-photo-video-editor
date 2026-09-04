@@ -14,6 +14,7 @@ Pod::Spec.new do |s|
   s.source       = { :git => "https://github.com/Babur171/react-native-photo-video-editor.git", :tag => "#{s.version}" }
 
   s.source_files = "ios/**/*.{h,m,mm,swift,cpp}"
+  s.resource_bundles = { "PhotoVideoEditorStickers" => ["ios/Resources/Stickers/*.png"] }
   s.private_header_files = "ios/**/*.h"
   # ios/Tests holds XCTest-based unit tests, not library sources — XCTest isn't linked into
   # consumer app targets, so these must never ship as part of the pod's normal build.

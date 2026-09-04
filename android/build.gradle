@@ -49,7 +49,7 @@ android {
 dependencies {
   implementation "com.facebook.react:react-android"
   implementation "androidx.exifinterface:exifinterface:1.3.7"
-  // Grid layout for the online-stickers browse sheet (Stickers > Browse online).
+  // Grid layout for the bundled sticker collection.
   implementation "androidx.recyclerview:recyclerview:1.3.2"
   // Keep the editor on the same Media3 ABI used by react-native-video.
   implementation "androidx.media3:media3-exoplayer:1.8.0"

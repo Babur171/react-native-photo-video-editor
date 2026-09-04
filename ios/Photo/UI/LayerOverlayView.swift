@@ -9,6 +9,7 @@ final class LayerOverlayView: UIView {
   var layers: [PhotoLayer] = [] { didSet { setNeedsDisplay() } }
   var selectedLayerID: String? { didSet { setNeedsDisplay() } }
   var onLayerTapped: ((String?) -> Void)?
+  var onLayerDoubleTapped: ((String) -> Void)?
   var onLayerTransformChanged: ((_ id: String, _ x: CGFloat, _ y: CGFloat, _ scale: CGFloat, _ rotationDegrees: CGFloat) -> Void)?
   var onLayerTransformEnded: ((String) -> Void)?
 
@@ -107,7 +108,10 @@ final class LayerOverlayView: UIView {
     }
   }
 
-  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { endTouches(touches) }
+  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+    if let touch = touches.first, touch.tapCount >= 2, let id = gestureID { onLayerDoubleTapped?(id) }
+    endTouches(touches)
+  }
   override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { endTouches(touches) }
 
   private func endTouches(_ touches: Set<UITouch>) {
@@ -146,6 +150,10 @@ final class LayerOverlayView: UIView {
       // Mirrors `PhotoLayerRenderer.drawOverlay`'s box: full canvas width, height from aspect ratio.
       let aspectRatio = layer.overlayAspectRatio.flatMap { $0 > 0 ? $0 : nil } ?? 1
       base = CGSize(width: imageBounds.width / 2, height: imageBounds.width / (2 * aspectRatio))
+    case .drawing:
+      let maxX = layer.drawPoints.map { abs($0.0) }.max() ?? 0.08
+      let maxY = layer.drawPoints.map { abs($0.1) }.max() ?? 0.08
+      base = CGSize(width: maxX * imageBounds.width + handleRadius, height: maxY * imageBounds.height + handleRadius)
     }
     return CGSize(width: max(handleRadius, base.width * layer.scale), height: max(handleRadius, base.height * layer.scale))
   }

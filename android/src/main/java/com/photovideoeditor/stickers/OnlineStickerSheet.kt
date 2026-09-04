@@ -3,12 +3,14 @@ package com.photovideoeditor.stickers
 import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
@@ -18,7 +20,6 @@ import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.recyclerview.widget.GridLayoutManager
@@ -26,41 +27,50 @@ import androidx.recyclerview.widget.RecyclerView
 import com.photovideoeditor.ui.DesignTokens
 import com.photovideoeditor.ui.components.dpToPx
 import com.photovideoeditor.ui.components.editorChip
-import com.photovideoeditor.ui.components.editorPrimaryButton
 import com.photovideoeditor.ui.components.roundedDrawable
+import com.photovideoeditor.files.SourceResolver
+import java.io.File
+import java.io.FileOutputStream
+import java.net.URL
+import java.util.concurrent.Executors
+
+data class RuntimeSticker(val id: String, val uri: String)
 
 /**
- * Bottom sheet listing OpenMoji's free sticker catalog (search + category filter + grid),
+ * Bottom sheet listing bundled sticker assets (search + category filter + grid),
  * built as a plain [Dialog] (no Material `BottomSheetDialog`, which isn't a dependency here) that
  * slides up from the bottom and covers ~85% of the screen height.
  */
 class OnlineStickerSheet(
   context: Context,
+  private val runtimeStickers: List<RuntimeSticker> = emptyList(),
   private val onStickerPicked: (localFilePath: String) -> Unit
 ) : Dialog(context, android.R.style.Theme_Black_NoTitleBar) {
 
   private val mainHandler = Handler(Looper.getMainLooper())
+  private val ioExecutor = Executors.newFixedThreadPool(3)
   private var searchDebounce: Runnable? = null
 
-  private var allEntries: List<OpenMojiEntry> = emptyList()
+  private val localAssets: List<String> by lazy {
+    context.assets.list("Stickers")?.filter { it.endsWith(".png", ignoreCase = true) }?.sorted() ?: emptyList()
+  }
   private var selectedGroup: String? = null // null == "All"
   private var searchQuery: String = ""
-  private var loadError: Exception? = null
-  private var loading = true
 
   private lateinit var searchInput: EditText
   private lateinit var chipRow: LinearLayout
   private lateinit var recycler: RecyclerView
-  private lateinit var progress: ProgressBar
-  private lateinit var statusText: TextView
-  private lateinit var retryButton: View
   private lateinit var adapter: StickerAdapter
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(buildRootView())
     configureWindow()
-    loadCatalog()
+  }
+
+  override fun dismiss() {
+    ioExecutor.shutdownNow()
+    super.dismiss()
   }
 
   private fun configureWindow() {
@@ -76,7 +86,7 @@ class OnlineStickerSheet(
 
   private fun buildRootView(): View {
     val screenHeight = context.resources.displayMetrics.heightPixels
-    val sheetHeight = (screenHeight * 0.85f).toInt()
+    val sheetHeight = (screenHeight * 0.78f).toInt()
 
     val dimBackground = FrameLayout(context).apply {
       setBackgroundColor(Color.argb(140, 0, 0, 0))
@@ -90,17 +100,47 @@ class OnlineStickerSheet(
       setPadding(dp(DesignTokens.spaceLg), dp(DesignTokens.spaceMd), dp(DesignTokens.spaceLg), dp(DesignTokens.spaceLg))
     }
 
-    // Decorative drag handle.
-    sheet.addView(
-      View(context).apply { setBackgroundColor(DesignTokens.outlineVariant) },
-      LinearLayout.LayoutParams(dp(36), dp(4)).apply {
-        gravity = Gravity.CENTER_HORIZONTAL
-        bottomMargin = dp(DesignTokens.spaceMd)
+    // Functional drag handle with a generous touch target. The sheet follows
+    // the finger, dismisses past the threshold, or springs back into place.
+    var dragStartY = 0f
+    var sheetStartTranslation = 0f
+    val dragHandle = FrameLayout(context).apply {
+      isClickable = true
+      contentDescription = "Drag down to close stickers"
+      addView(
+        View(context).apply { setBackgroundColor(DesignTokens.outlineVariant) },
+        FrameLayout.LayoutParams(dp(40), dp(4), Gravity.CENTER)
+      )
+      setOnTouchListener { _, event ->
+        when (event.actionMasked) {
+          MotionEvent.ACTION_DOWN -> {
+            dragStartY = event.rawY
+            sheetStartTranslation = sheet.translationY
+            true
+          }
+          MotionEvent.ACTION_MOVE -> {
+            sheet.translationY = (sheetStartTranslation + event.rawY - dragStartY).coerceAtLeast(0f)
+            true
+          }
+          MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            val shouldDismiss = sheet.translationY >= minOf(sheet.height * 0.18f, dp(140).toFloat())
+            if (shouldDismiss) {
+              sheet.animate().translationY(sheet.height.toFloat()).setDuration(180).withEndAction { dismiss() }.start()
+            } else {
+              sheet.animate().translationY(0f).setDuration(180).start()
+            }
+            true
+          }
+          else -> false
+        }
       }
-    )
+    }
+    sheet.addView(dragHandle, LinearLayout.LayoutParams(MATCH, dp(28)).apply {
+      bottomMargin = dp(DesignTokens.spaceSm)
+    })
 
     sheet.addView(TextView(context).apply {
-      text = "Browse stickers"
+      text = "Stickers"
       setTextColor(DesignTokens.textPrimary)
       textSize = 16f
       setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -140,43 +180,19 @@ class OnlineStickerSheet(
     val gridContainer = FrameLayout(context)
 
     recycler = RecyclerView(context).apply {
-      layoutManager = GridLayoutManager(context, 4)
+      layoutManager = GridLayoutManager(context, 5)
+      setHasFixedSize(true)
     }
     adapter = StickerAdapter()
     recycler.adapter = adapter
     gridContainer.addView(recycler, FrameLayout.LayoutParams(MATCH, MATCH))
 
-    progress = ProgressBar(context)
-    gridContainer.addView(progress, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
-
-    val statusContainer = LinearLayout(context).apply {
-      orientation = LinearLayout.VERTICAL
-      gravity = Gravity.CENTER
-    }
-    statusText = TextView(context).apply {
-      setTextColor(DesignTokens.textSecondary)
-      textSize = 13f
-      gravity = Gravity.CENTER
-    }
-    statusContainer.addView(statusText, LinearLayout.LayoutParams(WRAP, WRAP))
-    retryButton = editorPrimaryButton(context, "Retry") { loadCatalog() }
-    statusContainer.addView(retryButton, LinearLayout.LayoutParams(WRAP, dp(DesignTokens.touchTargetMin)).apply {
-      topMargin = dp(DesignTokens.spaceMd)
-    })
-    gridContainer.addView(statusContainer, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
-
     sheet.addView(gridContainer, LinearLayout.LayoutParams(MATCH, 0, 1f).apply {
       topMargin = dp(DesignTokens.spaceMd)
     })
 
-    sheet.addView(TextView(context).apply {
-      text = "Stickers by OpenMoji (CC BY-SA 4.0)"
-      setTextColor(DesignTokens.textSubtle)
-      textSize = 10f
-      gravity = Gravity.CENTER
-    }, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(DesignTokens.spaceSm) })
-
-    updateStatusViews()
+    rebuildChips()
+    refreshList()
 
     val root = FrameLayout(context)
     root.addView(dimBackground, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -194,27 +210,10 @@ class OnlineStickerSheet(
       )
     }
 
-  private fun loadCatalog() {
-    loading = true
-    loadError = null
-    updateStatusViews()
-    OpenMojiCatalog.load(context) { entries, error ->
-      loading = false
-      if (entries != null) {
-        allEntries = entries
-        loadError = null
-        rebuildChips()
-        refreshList()
-      } else {
-        loadError = error
-      }
-      updateStatusViews()
-    }
-  }
-
   private fun rebuildChips() {
     chipRow.removeAllViews()
-    val groups = listOf<String?>(null) + OpenMojiCatalog.groups()
+    val localGroups = localAssets.map { "local:" + it.substringBefore('_').lowercase() }.distinct()
+    val groups = listOf<String?>(null) + (if (runtimeStickers.isNotEmpty()) listOf("runtime") else emptyList()) + localGroups
     groups.forEach { group ->
       val label = group?.let { humanizeGroup(it) } ?: "All"
       val chip = editorChip(context, label, selected = group == selectedGroup) {
@@ -227,32 +226,20 @@ class OnlineStickerSheet(
   }
 
   private fun humanizeGroup(group: String): String =
-    group.split("-").joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
+    if (group == "runtime") "My stickers" else group.removePrefix("local:").split("-").joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
 
   private fun refreshList() {
     val query = searchQuery.trim()
-    val list = if (query.isNotEmpty()) {
-      OpenMojiCatalog.search(query)
-    } else {
-      val group = selectedGroup
-      if (group == null) allEntries else OpenMojiCatalog.byGroup(group)
-    }
-    adapter.submit(list)
-    updateStatusViews()
-  }
-
-  private fun updateStatusViews() {
-    progress.visibility = if (loading) View.VISIBLE else View.GONE
-    val error = loadError
-    val empty = !loading && error == null && adapter.itemCount == 0
-    recycler.visibility = if (!loading && error == null && !empty) View.VISIBLE else View.GONE
-    statusText.visibility = if (!loading && (error != null || empty)) View.VISIBLE else View.GONE
-    retryButton.visibility = if (!loading && error != null) View.VISIBLE else View.GONE
-    statusText.text = when {
-      error != null -> "Couldn't load stickers — check your connection."
-      empty -> "No stickers found."
-      else -> ""
-    }
+    val group = selectedGroup
+    val local = localAssets.filter { asset ->
+      val matchesQuery = query.isEmpty() || asset.contains(query, ignoreCase = true)
+      val matchesGroup = group == null || (group.startsWith("local:") && asset.startsWith(group.removePrefix("local:"), ignoreCase = true))
+      matchesQuery && matchesGroup
+    }.map { StickerItem(assetName = it) }
+    val runtime = runtimeStickers.filter {
+      (group == null || group == "runtime") && (query.isEmpty() || it.id.contains(query, ignoreCase = true))
+    }.map { StickerItem(runtime = it) }
+    adapter.submit(runtime + local)
   }
 
   private inner class StickerViewHolder(itemView: FrameLayout) : RecyclerView.ViewHolder(itemView) {
@@ -260,9 +247,9 @@ class OnlineStickerSheet(
   }
 
   private inner class StickerAdapter : RecyclerView.Adapter<StickerViewHolder>() {
-    private var items: List<OpenMojiEntry> = emptyList()
+    private var items: List<StickerItem> = emptyList()
 
-    fun submit(newItems: List<OpenMojiEntry>) {
+    fun submit(newItems: List<StickerItem>) {
       items = newItems
       notifyDataSetChanged()
     }
@@ -270,12 +257,13 @@ class OnlineStickerSheet(
     override fun getItemCount(): Int = items.size
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): StickerViewHolder {
-      val cardSize = dp(72)
+      val availableWidth = context.resources.displayMetrics.widthPixels - dp(DesignTokens.spaceLg * 2) - dp(8 * 5)
+      val cardSize = (availableWidth / 5).coerceAtLeast(dp(52))
       val image = ImageView(context).apply {
         scaleType = ImageView.ScaleType.CENTER_INSIDE
       }
       val cell = FrameLayout(context).apply {
-        background = roundedDrawable(DesignTokens.surfaceContainer, DesignTokens.radiusMd, context)
+        background = roundedDrawable(DesignTokens.surfaceContainerLow, DesignTokens.radiusMd, context)
         addView(image, FrameLayout.LayoutParams(cardSize - dp(16), cardSize - dp(16), Gravity.CENTER))
       }
       cell.layoutParams = RecyclerView.LayoutParams(cardSize, cardSize).apply {
@@ -285,21 +273,64 @@ class OnlineStickerSheet(
     }
 
     override fun onBindViewHolder(holder: StickerViewHolder, position: Int) {
-      val entry = items[position]
-      RemoteImageLoader.loadThumbnail(context, OpenMojiCatalog.thumbnailUrl(entry.hexcode), holder.imageView)
-      holder.itemView.setOnClickListener { onStickerTapped(entry) }
+      val item = items[position]
+      holder.imageView.setImageDrawable(null)
+      item.assetName?.let { asset ->
+        holder.imageView.setImageBitmap(context.assets.open("Stickers/$asset").use { BitmapFactory.decodeStream(it) })
+        holder.itemView.setOnClickListener { onLocalStickerTapped(asset) }
+      }
+      item.runtime?.let { runtime ->
+        loadRuntimeThumbnail(runtime, holder.imageView)
+        holder.itemView.setOnClickListener { onRuntimeStickerTapped(runtime) }
+      }
     }
   }
 
-  private fun onStickerTapped(entry: OpenMojiEntry) {
-    Toast.makeText(context, "Downloading sticker…", Toast.LENGTH_SHORT).show()
-    RemoteImageLoader.downloadFull(context, OpenMojiCatalog.fullUrl(entry.hexcode)) { path, error ->
-      if (path != null) {
-        onStickerPicked(path)
-        dismiss()
-      } else {
-        Toast.makeText(context, "Couldn't download that sticker, try another.", Toast.LENGTH_SHORT).show()
+  private data class StickerItem(val assetName: String? = null, val runtime: RuntimeSticker? = null)
+
+  private fun loadRuntimeThumbnail(sticker: RuntimeSticker, imageView: ImageView) {
+    imageView.tag = sticker.uri
+    ioExecutor.execute {
+      val bitmap = try {
+        if (sticker.uri.startsWith("https://")) downloadRuntimeSticker(sticker.uri).inputStream().use(BitmapFactory::decodeStream)
+        else SourceResolver.resolvePath(context, sticker.uri, "pve_runtime_sticker")?.let(BitmapFactory::decodeFile)
+      } catch (_: Exception) { null }
+      mainHandler.post { if (imageView.tag == sticker.uri) imageView.setImageBitmap(bitmap) }
+    }
+  }
+
+  private fun onRuntimeStickerTapped(sticker: RuntimeSticker) {
+    ioExecutor.execute {
+      val path = try {
+        if (sticker.uri.startsWith("https://")) {
+          val output = File.createTempFile("pve_runtime_sticker_", ".img", context.cacheDir)
+          output.writeBytes(downloadRuntimeSticker(sticker.uri))
+          output.absolutePath
+        } else SourceResolver.resolvePath(context, sticker.uri, "pve_runtime_sticker")
+      } catch (_: Exception) { null }
+      mainHandler.post {
+        if (path != null) { onStickerPicked(path); dismiss() }
+        else Toast.makeText(context, "Couldn't open that sticker.", Toast.LENGTH_SHORT).show()
       }
+    }
+  }
+
+  private fun downloadRuntimeSticker(uri: String): ByteArray {
+    val connection = URL(uri).openConnection().apply {
+      connectTimeout = 10_000
+      readTimeout = 15_000
+    }
+    return connection.getInputStream().use { it.readBytes() }
+  }
+
+  private fun onLocalStickerTapped(assetName: String) {
+    try {
+      val output = File(context.cacheDir, "sticker-${assetName.lowercase()}")
+      context.assets.open("Stickers/$assetName").use { input -> FileOutputStream(output).use(input::copyTo) }
+      onStickerPicked(output.absolutePath)
+      dismiss()
+    } catch (_: Exception) {
+      Toast.makeText(context, "Couldn't open that sticker.", Toast.LENGTH_SHORT).show()
     }
   }
 

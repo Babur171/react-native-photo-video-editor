@@ -28,6 +28,7 @@ class LayerOverlayView(context: Context) : View(context) {
   var selectedLayerId: String? = null
     set(value) { field = value; invalidate() }
   var onLayerTapped: ((String?) -> Unit)? = null
+  var onLayerDoubleTapped: ((String) -> Unit)? = null
   var onLayerTransformChanged: ((id: String, x: Float, y: Float, scale: Float, rotationDegrees: Float) -> Unit)? = null
   var onLayerTransformEnded: ((id: String) -> Unit)? = null
 
@@ -40,6 +41,9 @@ class LayerOverlayView(context: Context) : View(context) {
   private var startAngle = 0f
   private var startMidX = 0f
   private var startMidY = 0f
+  private var movedDuringGesture = false
+  private var lastTapTimeMs = 0L
+  private var lastTapLayerId: String? = null
   private val density = resources.displayMetrics.density
   private val handleRadius = 11f * density
   private val handleTouchRadius = 30f * density
@@ -79,6 +83,7 @@ class LayerOverlayView(context: Context) : View(context) {
         onLayerTapped?.invoke(hit?.id)
         if (hit == null || hit.locked) { resetGesture(); return false }
         gestureId = hit.id
+        movedDuringGesture = false
         startLayer = hit.copy()
         startPointX = event.x; startPointY = event.y
         if (handleHit != null) {
@@ -103,6 +108,7 @@ class LayerOverlayView(context: Context) : View(context) {
       }
       MotionEvent.ACTION_MOVE -> {
         val initial = startLayer ?: return false
+        if (hypot(event.x - startPointX, event.y - startPointY) > handleRadius) movedDuringGesture = true
         when (gesture) {
           Gesture.DRAG -> {
             val x = (initial.x + (event.x - startPointX) / imageBounds.width()).coerceIn(0f, 1f)
@@ -127,7 +133,16 @@ class LayerOverlayView(context: Context) : View(context) {
         }
         return true
       }
-      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { finishGesture(); return true }
+      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+        val tappedId = gestureId
+        if (event.actionMasked == MotionEvent.ACTION_UP && !movedDuringGesture && tappedId != null) {
+          val now = android.os.SystemClock.uptimeMillis()
+          if (lastTapLayerId == tappedId && now - lastTapTimeMs <= 350L) {
+            onLayerDoubleTapped?.invoke(tappedId); lastTapLayerId = null; lastTapTimeMs = 0L
+          } else { lastTapLayerId = tappedId; lastTapTimeMs = now }
+        }
+        finishGesture(); return true
+      }
       MotionEvent.ACTION_POINTER_UP -> return true
     }
     return false
@@ -165,6 +180,11 @@ class LayerOverlayView(context: Context) : View(context) {
         val aspect = layer.overlayAspectRatio ?: 1f
         val baseSize = shortSide * 0.6f
         if (aspect >= 1f) Pair(baseSize / 2f, (baseSize / aspect) / 2f) else Pair((baseSize * aspect) / 2f, baseSize / 2f)
+      }
+      LayerType.DRAWING -> {
+        val maxX = layer.drawPoints.maxOfOrNull { kotlin.math.abs(it.first) } ?: 0.08f
+        val maxY = layer.drawPoints.maxOfOrNull { kotlin.math.abs(it.second) } ?: 0.08f
+        Pair(maxX * imageBounds.width() + handleRadius, maxY * imageBounds.height() + handleRadius)
       }
     }
     return Pair((base.first * layer.scale).coerceAtLeast(handleRadius), (base.second * layer.scale).coerceAtLeast(handleRadius))

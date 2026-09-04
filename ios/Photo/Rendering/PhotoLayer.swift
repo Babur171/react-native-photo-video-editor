@@ -1,7 +1,7 @@
 import UIKit
 
 enum LayerType {
-  case text, sticker, overlay
+  case text, sticker, overlay, drawing
 }
 
 /// A single non-destructive overlay layer (text, sticker, or a user-uploaded
@@ -31,6 +31,10 @@ struct PhotoLayer {
   // Overlay (user-uploaded image, placed as a fully generic movable/resizable/rotatable layer)
   var overlayUri: String?
   var overlayAspectRatio: CGFloat?
+  // Drawing (points are normalized offsets from x/y)
+  var drawColor: UIColor = .red
+  var drawStrokeWidth: CGFloat = 0.012
+  var drawPoints: [(CGFloat, CGFloat)] = []
   // Timing (video overlays only; ignored for photo layers). endMs <= 0 means "to end of video".
   var startMs: Int64 = 0
   var endMs: Int64 = 0

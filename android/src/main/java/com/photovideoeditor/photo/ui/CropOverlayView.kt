@@ -31,7 +31,7 @@ class CropOverlayView(context: Context) : View(context) {
   private var lastX = 0f
   private var lastY = 0f
 
-  private enum class Handle { NONE, MOVE, TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
+  private enum class Handle { NONE, MOVE, TOP, RIGHT, BOTTOM, LEFT, TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
 
   /** Sets the on-screen image rect this overlay crops against. Resets the crop to full-frame when [resetCrop] is true. */
   fun setImageBounds(bounds: RectF, resetCrop: Boolean) {
@@ -41,6 +41,18 @@ class CropOverlayView(context: Context) : View(context) {
       reportCrop()
     }
     invalidate()
+  }
+
+  /** Restores a normalized crop rectangle, used when reopening or cancelling crop mode. */
+  fun setCrop(left: Float, top: Float, right: Float, bottom: Float) {
+    if (imageBounds.width() <= 0 || imageBounds.height() <= 0) return
+    cropRect = RectF(
+      imageBounds.left + left * imageBounds.width(),
+      imageBounds.top + top * imageBounds.height(),
+      imageBounds.left + right * imageBounds.width(),
+      imageBounds.top + bottom * imageBounds.height()
+    )
+    clampToImageBounds(); invalidate()
   }
 
   fun setAspectRatio(ratio: Float?) {
@@ -77,9 +89,13 @@ class CropOverlayView(context: Context) : View(context) {
     }
     listOf(
       cropRect.left to cropRect.top,
+      cropRect.centerX() to cropRect.top,
       cropRect.right to cropRect.top,
+      cropRect.right to cropRect.centerY(),
+      cropRect.right to cropRect.bottom,
+      cropRect.centerX() to cropRect.bottom,
       cropRect.left to cropRect.bottom,
-      cropRect.right to cropRect.bottom
+      cropRect.left to cropRect.centerY()
     ).forEach { (x, y) -> canvas.drawCircle(x, y, 8f, handlePaint) }
   }
 
@@ -118,6 +134,10 @@ class CropOverlayView(context: Context) : View(context) {
       near(cropRect.right, cropRect.top) -> Handle.TOP_RIGHT
       near(cropRect.left, cropRect.bottom) -> Handle.BOTTOM_LEFT
       near(cropRect.right, cropRect.bottom) -> Handle.BOTTOM_RIGHT
+      near(cropRect.centerX(), cropRect.top) -> Handle.TOP
+      near(cropRect.right, cropRect.centerY()) -> Handle.RIGHT
+      near(cropRect.centerX(), cropRect.bottom) -> Handle.BOTTOM
+      near(cropRect.left, cropRect.centerY()) -> Handle.LEFT
       cropRect.contains(x, y) -> Handle.MOVE
       else -> Handle.NONE
     }
@@ -131,6 +151,10 @@ class CropOverlayView(context: Context) : View(context) {
       Handle.TOP_RIGHT -> { proposed.right += dx; proposed.top += dy }
       Handle.BOTTOM_LEFT -> { proposed.left += dx; proposed.bottom += dy }
       Handle.BOTTOM_RIGHT -> { proposed.right += dx; proposed.bottom += dy }
+      Handle.TOP -> proposed.top += dy
+      Handle.RIGHT -> proposed.right += dx
+      Handle.BOTTOM -> proposed.bottom += dy
+      Handle.LEFT -> proposed.left += dx
       Handle.NONE -> return
     }
     if (proposed.width() < minSizePx || proposed.height() < minSizePx) return
@@ -139,6 +163,14 @@ class CropOverlayView(context: Context) : View(context) {
         Handle.TOP_LEFT, Handle.BOTTOM_RIGHT -> proposed.bottom = proposed.top + proposed.width() / ratio
         Handle.TOP_RIGHT -> proposed.top = proposed.bottom - proposed.width() / ratio
         Handle.BOTTOM_LEFT -> proposed.bottom = proposed.top + proposed.width() / ratio
+        Handle.LEFT, Handle.RIGHT -> {
+          val centerY = cropRect.centerY(); val height = proposed.width() / ratio
+          proposed.top = centerY - height / 2; proposed.bottom = centerY + height / 2
+        }
+        Handle.TOP, Handle.BOTTOM -> {
+          val centerX = cropRect.centerX(); val width = proposed.height() * ratio
+          proposed.left = centerX - width / 2; proposed.right = centerX + width / 2
+        }
         else -> {}
       }
     }
