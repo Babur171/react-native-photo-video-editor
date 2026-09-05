@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.2.0
+
+- Fix video export placing text/sticker overlays at the wrong size and position on Android. Media3 composites an overlay texture 1:1 in pixels rather than stretching it to fill the frame, so the overlay bitmap's resolution cap shrank every layer toward the frame centre on sources above the cap (4K/1440p); 1080p and below were unaffected. The overlay canvas is now scaled back to the full frame via `OverlaySettings`, making preview and export match at any resolution. iOS was never affected (its `CALayer` scales to fit).
+- Expand filter presets from 5 to 17: Vivid/Vivid Warm/Vivid Cool, Warm, Cool, Natural, Soft, Fade, Mono, Noir, Silvertone, Vintage, Sepia, Retro, Dramatic/Dramatic Warm/Dramatic Cool. Existing preset ids still resolve, so previously edited photos render unchanged.
+- Redesign the photo editor's bottom UI around one reusable panel system (`EditorPanel.kt`/`.swift`): a compact `Title / Reset / Done` header, a single slider that re-points at whichever adjustment is selected, and horizontally scrollable icon+label strips. Replaces the full-height rectangular adjustment buttons and oversized Done button.
+- Add a filter carousel with per-preset thumbnails of the current photo, a purple selection outline, and an intensity slider (iOS previously had no filter thumbnails at all).
+- Redesign the video editor: playback controls (circular play/pause, thin seek bar, time readout) now sit inside the media preview and auto-hide during playback; the preview has no border; the bottom toolbar is a compact Text/Stickers dock.
+- Size main-dock tools to roughly a fifth of the screen width and mark selection with a purple icon/label over a subtle disc instead of a filled tile.
+
+Note: iOS native code in this release is not compiler-verified — no macOS/Xcode toolchain was available. Android is Gradle-verified (`compileDebugKotlin`, 21 unit tests).
+
 ## 0.1.1
 
 - Add bundled offline sticker libraries and custom searchable bottom sheets on Android and iOS.
