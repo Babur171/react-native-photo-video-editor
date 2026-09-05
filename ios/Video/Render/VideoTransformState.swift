@@ -8,6 +8,7 @@ import CoreGraphics
 /// `AVMutableComposition` concatenating every clip — see `VideoEditSession`).
 struct VideoTransformState: Equatable {
   var rotationDegrees: Int = 0
+  var crop = PhotoTransformState()
   var aspectRatio: CGFloat?
   var coverFrameMs: Int64 = 0
   /// Preview-only for now: cycled via the Speed tool. Export does not yet honor this — see docs/video-editor.md.

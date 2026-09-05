@@ -59,6 +59,16 @@ class ZoomableImageView(context: Context) : ImageView(context) {
     onBoundsChanged?.invoke(currentImageBounds())
   }
 
+  override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+    super.onSizeChanged(w, h, oldw, oldh)
+    if (w != oldw || h != oldh) resetToFit()
+  }
+
+  fun setRenderedBounds(bounds: RectF) {
+    val image = drawable ?: return
+    imageMatrix = Matrix().apply { setRectToRect(RectF(0f, 0f, image.intrinsicWidth.toFloat(), image.intrinsicHeight.toFloat()), bounds, Matrix.ScaleToFit.FILL) }
+  }
+
   fun currentImageBounds(): RectF {
     val bitmapDrawable = drawable ?: return RectF(0f, 0f, width.toFloat(), height.toFloat())
     val rect = RectF(0f, 0f, bitmapDrawable.intrinsicWidth.toFloat(), bitmapDrawable.intrinsicHeight.toFloat())

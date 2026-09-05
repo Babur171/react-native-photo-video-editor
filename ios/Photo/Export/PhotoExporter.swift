@@ -52,9 +52,9 @@ enum PhotoExporter {
 
     let transformed = PhotoEditSession.applyTransform(upright, state: transform)
     let adjusted = PhotoAdjustmentRenderer.apply(transformed, adjustments: adjustments)
-    let layered = PhotoLayerRenderer.render(adjusted, layers: layers) { uri in resolveImageLayer(uri) }
-    let cropped = crop(layered, transform: transform)
-    let resized = resize(cropped, maxWidth: maxWidth, maxHeight: maxHeight)
+    let cropped = PhotoEditSession.crop(adjusted, state: transform)
+    let layered = PhotoLayerRenderer.render(cropped, layers: layers) { uri in resolveImageLayer(uri) }
+    let resized = resize(layered, maxWidth: maxWidth, maxHeight: maxHeight)
 
     let format = (exportOptions?["imageFormat"] as? String)?.lowercased() ?? "jpeg"
     let quality = qualityFor(exportOptions?["quality"] as? String ?? "high")

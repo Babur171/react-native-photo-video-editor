@@ -131,6 +131,10 @@ final class VideoExporter {
       }
     }
 
+    let cropPlan = VideoCropGeometry.plan(size:CGSize(width:renderWidth,height:renderHeight),state:state.crop,includeCrop:true)
+    transform = transform.concatenating(cropPlan.transform)
+    renderWidth = cropPlan.size.width; renderHeight = cropPlan.size.height
+
     let videoComposition = AVMutableVideoComposition()
     videoComposition.renderSize = CGSize(width: renderWidth, height: renderHeight)
     videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
@@ -145,7 +149,12 @@ final class VideoExporter {
     if !layers.isEmpty {
       let renderSize = CGSize(width: renderWidth, height: renderHeight)
       let longestEdge = max(renderSize.width, renderSize.height)
-      let overlayScale = min(1, 1280 / max(longestEdge, 1))
+      // Geometry is independent of this cap: each overlay surface below is a full-`renderSize`
+      // CALayer with `contentsGravity = .resizeAspect`, so a smaller (same-aspect) image is scaled
+      // back up to cover the whole frame. The cap only trades sharpness for peak memory. (Android's
+      // Media3 path has no such scale-to-fit — it composites overlay textures 1:1 in pixels — which
+      // is why `VideoExporter.kt` has to restore the same invariant explicitly via OverlaySettings.)
+      let overlayScale = min(1, 2560 / max(longestEdge, 1))
       let overlayRenderSize = CGSize(
         width: max(2, floor(renderSize.width * overlayScale)),
         height: max(2, floor(renderSize.height * overlayScale))

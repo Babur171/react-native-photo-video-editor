@@ -9,6 +9,7 @@ package com.photovideoeditor.video.render
  */
 data class VideoTransformState(
   val rotationDegrees: Int = 0,
+  val crop: com.photovideoeditor.photo.render.PhotoTransformState = com.photovideoeditor.photo.render.PhotoTransformState(),
   val aspectRatio: Float? = null,
   val coverFrameMs: Long = 0L,
   /** Preview-only for now: cycled via the Speed tool. Export does not yet honor this — see docs/video-editor.md. */

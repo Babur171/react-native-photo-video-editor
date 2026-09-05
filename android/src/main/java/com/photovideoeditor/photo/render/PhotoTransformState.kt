@@ -15,7 +15,12 @@ data class PhotoTransformState(
   val cropBottom: Float = 1f,
   val rotationDegrees: Int = 0,
   val straightenDegrees: Float = 0f,
-  val aspectRatio: Float? = null
+  val aspectRatio: Float? = null,
+  val aspectPreset: String = "Free",
+  // Viewport metadata only: zoom/pan are already encoded in normalized crop coordinates for export.
+  val zoom: Float = 1f,
+  val panX: Float = 0f,
+  val panY: Float = 0f
 ) {
   val isIdentity: Boolean
     get() = cropLeft == 0f && cropTop == 0f && cropRight == 1f && cropBottom == 1f &&

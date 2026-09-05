@@ -12,6 +12,7 @@ import com.photovideoeditor.photo.render.PhotoAdjustmentRenderer
 import com.photovideoeditor.photo.render.PhotoAdjustments
 import com.photovideoeditor.photo.render.PhotoLayer
 import com.photovideoeditor.photo.render.PhotoLayerRenderer
+import com.photovideoeditor.photo.render.PhotoTransformRenderer
 import com.photovideoeditor.photo.render.PhotoTransformState
 import org.json.JSONObject
 import java.io.File
@@ -68,11 +69,11 @@ object PhotoExporter {
       ?: throw PhotoExportException("E_OUT_OF_MEMORY", "The photo is too large to process on this device.")
 
     val upright = applyExifOrientation(decoded, exifOrientation)
-    val transformed = applyTransform(upright, transform)
+    val transformed = PhotoTransformRenderer.transform(upright, transform)
     val adjusted = PhotoAdjustmentRenderer.apply(transformed, adjustments)
-    val layered = PhotoLayerRenderer.render(adjusted, layers) { uri -> resolveImageUri(context, uri) }
-    val cropped = cropBitmap(layered, transform)
-    val resized = resizeToFit(cropped, maxWidth, maxHeight)
+    val cropped = PhotoTransformRenderer.crop(adjusted, transform)
+    val layered = PhotoLayerRenderer.render(cropped, layers) { uri -> resolveImageUri(context, uri) }
+    val resized = resizeToFit(layered, maxWidth, maxHeight)
 
     val format = exportOptions?.optString("imageFormat", "jpeg")?.lowercase() ?: "jpeg"
     val quality = qualityFor(exportOptions?.optString("quality", "high") ?: "high")
@@ -93,9 +94,9 @@ object PhotoExporter {
     if (decoded !== upright) decoded.recycle()
     if (upright !== transformed) upright.recycle()
     if (transformed !== adjusted) transformed.recycle()
-    if (adjusted !== layered) adjusted.recycle()
-    if (layered !== cropped) layered.recycle()
-    if (cropped !== resized) cropped.recycle()
+    if (adjusted !== cropped) adjusted.recycle()
+    if (cropped !== layered) cropped.recycle()
+    if (layered !== resized) layered.recycle()
 
     return PhotoExportResult(
       uri = Uri.fromFile(outputFile).toString(),
@@ -128,22 +129,6 @@ object PhotoExporter {
       else -> return bitmap
     }
     return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-  }
-
-  private fun applyTransform(bitmap: Bitmap, transform: PhotoTransformState): Bitmap {
-    if (transform.rotationDegrees == 0 && transform.straightenDegrees == 0f) return bitmap
-    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, transform.toMatrix(), true)
-  }
-
-  private fun cropBitmap(bitmap: Bitmap, transform: PhotoTransformState): Bitmap {
-    if (transform.cropLeft <= 0f && transform.cropTop <= 0f && transform.cropRight >= 1f && transform.cropBottom >= 1f) {
-      return bitmap
-    }
-    val left = (transform.cropLeft * bitmap.width).roundToInt().coerceIn(0, bitmap.width - 1)
-    val top = (transform.cropTop * bitmap.height).roundToInt().coerceIn(0, bitmap.height - 1)
-    val right = (transform.cropRight * bitmap.width).roundToInt().coerceIn(left + 1, bitmap.width)
-    val bottom = (transform.cropBottom * bitmap.height).roundToInt().coerceIn(top + 1, bitmap.height)
-    return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
   }
 
   private fun resizeToFit(bitmap: Bitmap, maxWidth: Int?, maxHeight: Int?): Bitmap {

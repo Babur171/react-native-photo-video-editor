@@ -52,8 +52,10 @@ final class PhotoEditSession {
   }
 
   /// Renders rotate/flip/straighten + adjustments + layers — the crop overlay draws the crop live on top of this.
-  func renderPreview() -> UIImage? {
-    guard let base = computeBase() else { return nil }
+  func renderPreview(cropping: Bool = false) -> UIImage? {
+    guard let transformed = computeBase() else { return nil }
+    if cropping { return transformed }
+    let base = Self.crop(transformed, state: state)
     if cachedPreviewBaseImage === base,
        cachedPreviewLayerRevision == layerStack.revision,
        let cachedPreviewImage {
@@ -94,16 +96,25 @@ final class PhotoEditSession {
 
   static func applyTransform(_ image: UIImage, state: PhotoTransformState) -> UIImage {
     guard state.rotationDegrees != 0 || state.straightenDegrees != 0 else { return image }
-    let radians = state.totalRotationRadians
-    let rotatedBounds = CGRect(origin: .zero, size: image.size).applying(CGAffineTransform(rotationAngle: radians))
-    let canvasSize = CGSize(width: abs(rotatedBounds.width), height: abs(rotatedBounds.height))
-    let renderer = pixelRenderer(size: canvasSize)
-    return renderer.image { context in
+    let swap = state.rotationDegrees % 180 != 0
+    let canvasSize = swap ? CGSize(width: image.size.height, height: image.size.width) : image.size
+    let fill = CropGeometry.fillScale(width: canvasSize.width, height: canvasSize.height, degrees: state.straightenDegrees)
+    return pixelRenderer(size: canvasSize).image { context in
       let ctx = context.cgContext
-      ctx.translateBy(x: canvasSize.width / 2, y: canvasSize.height / 2)
-      ctx.rotate(by: radians)
-      image.draw(in: CGRect(x: -image.size.width / 2, y: -image.size.height / 2, width: image.size.width, height: image.size.height))
+      ctx.translateBy(x: canvasSize.width/2,y:canvasSize.height/2)
+      ctx.rotate(by:state.totalRotationRadians); ctx.scaleBy(x:fill,y:fill)
+      image.draw(in:CGRect(x:-image.size.width/2,y:-image.size.height/2,width:image.size.width,height:image.size.height))
     }
+  }
+
+  static func crop(_ image: UIImage, state: PhotoTransformState) -> UIImage {
+    guard let cg = image.cgImage else { return image }
+    let w = CGFloat(cg.width), h = CGFloat(cg.height)
+    let left = max(0,min(w-1,(state.cropLeft*w).rounded())), top = max(0,min(h-1,(state.cropTop*h).rounded()))
+    let right = max(left+1,min(w,(state.cropRight*w).rounded())), bottom = max(top+1,min(h,(state.cropBottom*h).rounded()))
+    if left == 0 && top == 0 && right == w && bottom == h { return image }
+    guard let cropped = cg.cropping(to:CGRect(x:left,y:top,width:right-left,height:bottom-top)) else { return image }
+    return UIImage(cgImage:cropped)
   }
 
   private static func decodeUpright(sourceUri: String, maxDimension: CGFloat) -> UIImage? {

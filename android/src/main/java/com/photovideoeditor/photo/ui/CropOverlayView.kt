@@ -7,194 +7,152 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
+import com.photovideoeditor.photo.render.CropGeometry
+import com.photovideoeditor.photo.render.PhotoTransformState
 import kotlin.math.abs
+import kotlin.math.hypot
 
-/**
- * Draws a draggable/resizable crop rectangle over [imageBounds] (the on-screen
- * rect of the preview image, in this view's own coordinate space) and reports
- * the crop edges back normalized to that rect via [onCropChanged].
- */
+/** Crop handles own resize gestures; interior drags/pinches move the media behind a fixed box. */
 class CropOverlayView(context: Context) : View(context) {
   private var imageBounds = RectF()
+  private var fittedBounds = RectF()
   private var cropRect = RectF()
   private var aspectRatio: Float? = null
-  var onCropChanged: ((left: Float, top: Float, right: Float, bottom: Float) -> Unit)? = null
+  var onCropChanged: ((Float, Float, Float, Float) -> Unit)? = null
+  var onMediaBoundsChanged: ((RectF) -> Unit)? = null
+  var onViewportChanged: ((Float, Float, Float) -> Unit)? = null
+  private val density = resources.displayMetrics.density
+  private val dimPaint = Paint().apply { color = Color.argb(165, 0, 0, 0) }
+  private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = density }
+  private val gridPaint = Paint().apply { color = Color.argb(85, 255, 255, 255); strokeWidth = density * .5f }
+  private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; strokeWidth = 3 * density; strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE }
+  private var activeHandle: CropGeometry.Handle? = null
+  private var lastX = 0f; private var lastY = 0f; private var lastDistance = 0f
+  private var movingMedia = false
 
-  private val dimPaint = Paint().apply { color = Color.argb(153, 0, 0, 0) }
-  private val borderPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 3f }
-  private val gridPaint = Paint().apply { color = Color.argb(120, 255, 255, 255); style = Paint.Style.STROKE; strokeWidth = 1f }
-  private val handlePaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
-
-  private val handleTouchRadius = 56f
-  private val minSizePx = 96f
-  private var activeHandle = Handle.NONE
-  private var lastX = 0f
-  private var lastY = 0f
-
-  private enum class Handle { NONE, MOVE, TOP, RIGHT, BOTTOM, LEFT, TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
-
-  /** Sets the on-screen image rect this overlay crops against. Resets the crop to full-frame when [resetCrop] is true. */
-  fun setImageBounds(bounds: RectF, resetCrop: Boolean) {
-    imageBounds = RectF(bounds)
-    if (resetCrop || cropRect.width() <= 0f || cropRect.height() <= 0f) {
-      cropRect = RectF(imageBounds)
-      reportCrop()
-    }
+  fun restore(bounds: RectF, state: PhotoTransformState) {
+    if (bounds.width() <= 0 || bounds.height() <= 0) return
+    fittedBounds = RectF(bounds)
+    val zoom = state.zoom.coerceIn(1f, 8f)
+    val cx = bounds.centerX() + state.panX * bounds.width()
+    val cy = bounds.centerY() + state.panY * bounds.height()
+    imageBounds = RectF(cx - bounds.width() * zoom / 2, cy - bounds.height() * zoom / 2,
+      cx + bounds.width() * zoom / 2, cy + bounds.height() * zoom / 2)
+    aspectRatio = state.aspectRatio
+    setCrop(state.cropLeft, state.cropTop, state.cropRight, state.cropBottom)
+    onMediaBoundsChanged?.invoke(RectF(imageBounds))
     invalidate()
   }
 
-  /** Restores a normalized crop rectangle, used when reopening or cancelling crop mode. */
+  fun setImageBounds(bounds: RectF, resetCrop: Boolean) {
+    val old = normalized()
+    imageBounds = RectF(bounds); fittedBounds = RectF(bounds)
+    if (resetCrop || cropRect.isEmpty) cropRect = RectF(bounds) else setCrop(old[0], old[1], old[2], old[3])
+    invalidate()
+  }
+
   fun setCrop(left: Float, top: Float, right: Float, bottom: Float) {
-    if (imageBounds.width() <= 0 || imageBounds.height() <= 0) return
-    cropRect = RectF(
-      imageBounds.left + left * imageBounds.width(),
-      imageBounds.top + top * imageBounds.height(),
-      imageBounds.left + right * imageBounds.width(),
-      imageBounds.top + bottom * imageBounds.height()
-    )
-    clampToImageBounds(); invalidate()
+    cropRect = RectF(imageBounds.left + left * imageBounds.width(), imageBounds.top + top * imageBounds.height(),
+      imageBounds.left + right * imageBounds.width(), imageBounds.top + bottom * imageBounds.height())
+    invalidate()
   }
 
   fun setAspectRatio(ratio: Float?) {
     aspectRatio = ratio
-    if (ratio != null && imageBounds.width() > 0 && imageBounds.height() > 0) {
-      val centerX = cropRect.centerX()
-      val centerY = cropRect.centerY()
-      var width = cropRect.width()
-      var height = width / ratio
-      if (height > imageBounds.height()) {
-        height = cropRect.height()
-        width = height * ratio
-      }
-      cropRect = RectF(centerX - width / 2, centerY - height / 2, centerX + width / 2, centerY + height / 2)
-      clampToImageBounds()
-      invalidate()
-    }
-    reportCrop()
+    // A new preset starts with the largest centered rectangle in the visible media.
+    val available = RectF(imageBounds)
+    available.intersect(0f, 0f, width.toFloat(), height.toFloat())
+    cropRect = CropGeometry.fit(available.geometry(), ratio).native()
+    reportCrop(); invalidate()
   }
 
   override fun onDraw(canvas: Canvas) {
-    super.onDraw(canvas)
-    if (imageBounds.width() <= 0 || imageBounds.height() <= 0) return
-    canvas.drawRect(imageBounds.left, imageBounds.top, imageBounds.right, cropRect.top, dimPaint)
-    canvas.drawRect(imageBounds.left, cropRect.bottom, imageBounds.right, imageBounds.bottom, dimPaint)
-    canvas.drawRect(imageBounds.left, cropRect.top, cropRect.left, cropRect.bottom, dimPaint)
-    canvas.drawRect(cropRect.right, cropRect.top, imageBounds.right, cropRect.bottom, dimPaint)
+    if (cropRect.isEmpty) return
+    canvas.drawRect(0f, 0f, width.toFloat(), cropRect.top, dimPaint)
+    canvas.drawRect(0f, cropRect.bottom, width.toFloat(), height.toFloat(), dimPaint)
+    canvas.drawRect(0f, cropRect.top, cropRect.left, cropRect.bottom, dimPaint)
+    canvas.drawRect(cropRect.right, cropRect.top, width.toFloat(), cropRect.bottom, dimPaint)
     canvas.drawRect(cropRect, borderPaint)
-    val thirdWidth = cropRect.width() / 3
-    val thirdHeight = cropRect.height() / 3
     for (i in 1..2) {
-      canvas.drawLine(cropRect.left + thirdWidth * i, cropRect.top, cropRect.left + thirdWidth * i, cropRect.bottom, gridPaint)
-      canvas.drawLine(cropRect.left, cropRect.top + thirdHeight * i, cropRect.right, cropRect.top + thirdHeight * i, gridPaint)
+      val x = cropRect.left + cropRect.width() * i / 3; val y = cropRect.top + cropRect.height() * i / 3
+      canvas.drawLine(x, cropRect.top, x, cropRect.bottom, gridPaint)
+      canvas.drawLine(cropRect.left, y, cropRect.right, y, gridPaint)
     }
-    listOf(
-      cropRect.left to cropRect.top,
-      cropRect.centerX() to cropRect.top,
-      cropRect.right to cropRect.top,
-      cropRect.right to cropRect.centerY(),
-      cropRect.right to cropRect.bottom,
-      cropRect.centerX() to cropRect.bottom,
-      cropRect.left to cropRect.bottom,
-      cropRect.left to cropRect.centerY()
-    ).forEach { (x, y) -> canvas.drawCircle(x, y, 8f, handlePaint) }
+    val corner = 14 * density
+    for ((x, y) in listOf(cropRect.left to cropRect.top, cropRect.right to cropRect.top, cropRect.left to cropRect.bottom, cropRect.right to cropRect.bottom)) {
+      canvas.drawLine(x, y, x + if (x == cropRect.left) corner else -corner, y, handlePaint)
+      canvas.drawLine(x, y, x, y + if (y == cropRect.top) corner else -corner, handlePaint)
+    }
+    val edge = 8 * density
+    for (y in listOf(cropRect.top, cropRect.bottom)) canvas.drawLine(cropRect.centerX() - edge, y, cropRect.centerX() + edge, y, handlePaint)
+    for (x in listOf(cropRect.left, cropRect.right)) canvas.drawLine(x, cropRect.centerY() - edge, x, cropRect.centerY() + edge, handlePaint)
   }
 
   override fun onTouchEvent(event: MotionEvent): Boolean {
+    if (imageBounds.isEmpty) return false
     when (event.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
-        activeHandle = hitTest(event.x, event.y)
-        lastX = event.x
-        lastY = event.y
-        return activeHandle != Handle.NONE
+        activeHandle = hitTest(event.x, event.y); movingMedia = activeHandle == null
+        lastX = event.x; lastY = event.y; lastDistance = 0f
+        parent?.requestDisallowInterceptTouchEvent(true)
+      }
+      MotionEvent.ACTION_POINTER_DOWN -> {
+        activeHandle = null; movingMedia = true
+        lastX = (event.getX(0) + event.getX(1)) / 2; lastY = (event.getY(0) + event.getY(1)) / 2
+        lastDistance = hypot(event.getX(0) - event.getX(1), event.getY(0) - event.getY(1))
       }
       MotionEvent.ACTION_MOVE -> {
-        if (activeHandle == Handle.NONE) return false
-        val dx = event.x - lastX
-        val dy = event.y - lastY
-        lastX = event.x
-        lastY = event.y
-        applyDrag(activeHandle, dx, dy)
-        invalidate()
-        reportCrop()
-        return true
+        val multi = event.pointerCount > 1
+        val x = if (multi) (event.getX(0) + event.getX(1)) / 2 else event.x
+        val y = if (multi) (event.getY(0) + event.getY(1)) / 2 else event.y
+        val distance = if (multi) hypot(event.getX(0) - event.getX(1), event.getY(0) - event.getY(1)) else 0f
+        val handle = activeHandle
+        if (handle != null) {
+          val valid = RectF(imageBounds).apply { intersect(0f, 0f, width.toFloat(), height.toFloat()) }
+          cropRect = CropGeometry.resize(cropRect.geometry(), valid.geometry(), handle, x - lastX, y - lastY, aspectRatio, 48 * density).native()
+        } else if (movingMedia) {
+          moveMedia(x - lastX, y - lastY, if (lastDistance > 0 && distance > 0) distance / lastDistance else 1f, x, y)
+        }
+        lastX = x; lastY = y; lastDistance = distance
+        reportCrop(); invalidate()
+      }
+      MotionEvent.ACTION_POINTER_UP -> {
+        val index = if (event.actionIndex == 0) 1 else 0
+        lastX = event.getX(index); lastY = event.getY(index); lastDistance = 0f
       }
       MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-        val handled = activeHandle != Handle.NONE
-        activeHandle = Handle.NONE
-        return handled
+        activeHandle = null; movingMedia = false; lastDistance = 0f
+        parent?.requestDisallowInterceptTouchEvent(false)
       }
     }
-    return super.onTouchEvent(event)
+    return true
   }
 
-  private fun hitTest(x: Float, y: Float): Handle {
-    fun near(px: Float, py: Float) = abs(x - px) < handleTouchRadius && abs(y - py) < handleTouchRadius
-    return when {
-      near(cropRect.left, cropRect.top) -> Handle.TOP_LEFT
-      near(cropRect.right, cropRect.top) -> Handle.TOP_RIGHT
-      near(cropRect.left, cropRect.bottom) -> Handle.BOTTOM_LEFT
-      near(cropRect.right, cropRect.bottom) -> Handle.BOTTOM_RIGHT
-      near(cropRect.centerX(), cropRect.top) -> Handle.TOP
-      near(cropRect.right, cropRect.centerY()) -> Handle.RIGHT
-      near(cropRect.centerX(), cropRect.bottom) -> Handle.BOTTOM
-      near(cropRect.left, cropRect.centerY()) -> Handle.LEFT
-      cropRect.contains(x, y) -> Handle.MOVE
-      else -> Handle.NONE
-    }
+  private fun moveMedia(dx: Float, dy: Float, factor: Float, focusX: Float, focusY: Float) {
+    val minimumZoom = maxOf(1f, cropRect.width() / fittedBounds.width(), cropRect.height() / fittedBounds.height())
+    val zoom = imageBounds.width() / fittedBounds.width()
+    val scale = (zoom * factor).coerceIn(minimumZoom, maxOf(8f, minimumZoom)) / zoom
+    val w = imageBounds.width() * scale; val h = imageBounds.height() * scale
+    val left = (focusX + (imageBounds.left - focusX) * scale + dx).coerceIn(cropRect.right - w, cropRect.left)
+    val top = (focusY + (imageBounds.top - focusY) * scale + dy).coerceIn(cropRect.bottom - h, cropRect.top)
+    imageBounds = RectF(left, top, left + w, top + h)
+    onMediaBoundsChanged?.invoke(RectF(imageBounds))
+    onViewportChanged?.invoke(w / fittedBounds.width(), (imageBounds.centerX() - fittedBounds.centerX()) / fittedBounds.width(), (imageBounds.centerY() - fittedBounds.centerY()) / fittedBounds.height())
   }
 
-  private fun applyDrag(handle: Handle, dx: Float, dy: Float) {
-    val proposed = RectF(cropRect)
-    when (handle) {
-      Handle.MOVE -> proposed.offset(dx, dy)
-      Handle.TOP_LEFT -> { proposed.left += dx; proposed.top += dy }
-      Handle.TOP_RIGHT -> { proposed.right += dx; proposed.top += dy }
-      Handle.BOTTOM_LEFT -> { proposed.left += dx; proposed.bottom += dy }
-      Handle.BOTTOM_RIGHT -> { proposed.right += dx; proposed.bottom += dy }
-      Handle.TOP -> proposed.top += dy
-      Handle.RIGHT -> proposed.right += dx
-      Handle.BOTTOM -> proposed.bottom += dy
-      Handle.LEFT -> proposed.left += dx
-      Handle.NONE -> return
-    }
-    if (proposed.width() < minSizePx || proposed.height() < minSizePx) return
-    aspectRatio?.let { ratio ->
-      when (handle) {
-        Handle.TOP_LEFT, Handle.BOTTOM_RIGHT -> proposed.bottom = proposed.top + proposed.width() / ratio
-        Handle.TOP_RIGHT -> proposed.top = proposed.bottom - proposed.width() / ratio
-        Handle.BOTTOM_LEFT -> proposed.bottom = proposed.top + proposed.width() / ratio
-        Handle.LEFT, Handle.RIGHT -> {
-          val centerY = cropRect.centerY(); val height = proposed.width() / ratio
-          proposed.top = centerY - height / 2; proposed.bottom = centerY + height / 2
-        }
-        Handle.TOP, Handle.BOTTOM -> {
-          val centerX = cropRect.centerX(); val width = proposed.height() * ratio
-          proposed.left = centerX - width / 2; proposed.right = centerX + width / 2
-        }
-        else -> {}
-      }
-    }
-    cropRect = proposed
-    clampToImageBounds()
+  private fun hitTest(x: Float, y: Float): CropGeometry.Handle? {
+    val points = listOf(
+      Triple(cropRect.left, cropRect.top, CropGeometry.Handle.TOP_LEFT), Triple(cropRect.right, cropRect.top, CropGeometry.Handle.TOP_RIGHT),
+      Triple(cropRect.left, cropRect.bottom, CropGeometry.Handle.BOTTOM_LEFT), Triple(cropRect.right, cropRect.bottom, CropGeometry.Handle.BOTTOM_RIGHT),
+      Triple(cropRect.centerX(), cropRect.top, CropGeometry.Handle.TOP), Triple(cropRect.right, cropRect.centerY(), CropGeometry.Handle.RIGHT),
+      Triple(cropRect.centerX(), cropRect.bottom, CropGeometry.Handle.BOTTOM), Triple(cropRect.left, cropRect.centerY(), CropGeometry.Handle.LEFT))
+    val nearest = points.minByOrNull { hypot(x - it.first, y - it.second) } ?: return null
+    return nearest.third.takeIf { hypot(x - nearest.first, y - nearest.second) <= 24 * density }
   }
-
-  private fun clampToImageBounds() {
-    if (cropRect.left < imageBounds.left) cropRect.offset(imageBounds.left - cropRect.left, 0f)
-    if (cropRect.top < imageBounds.top) cropRect.offset(0f, imageBounds.top - cropRect.top)
-    if (cropRect.right > imageBounds.right) cropRect.offset(imageBounds.right - cropRect.right, 0f)
-    if (cropRect.bottom > imageBounds.bottom) cropRect.offset(0f, imageBounds.bottom - cropRect.bottom)
-    cropRect.left = cropRect.left.coerceAtLeast(imageBounds.left)
-    cropRect.top = cropRect.top.coerceAtLeast(imageBounds.top)
-    cropRect.right = cropRect.right.coerceAtMost(imageBounds.right)
-    cropRect.bottom = cropRect.bottom.coerceAtMost(imageBounds.bottom)
-  }
-
-  private fun reportCrop() {
-    if (imageBounds.width() <= 0 || imageBounds.height() <= 0) return
-    val left = (cropRect.left - imageBounds.left) / imageBounds.width()
-    val top = (cropRect.top - imageBounds.top) / imageBounds.height()
-    val right = (cropRect.right - imageBounds.left) / imageBounds.width()
-    val bottom = (cropRect.bottom - imageBounds.top) / imageBounds.height()
-    onCropChanged?.invoke(left, top, right, bottom)
-  }
+  private fun normalized(): FloatArray = if (imageBounds.isEmpty) floatArrayOf(0f, 0f, 1f, 1f) else floatArrayOf(
+    (cropRect.left - imageBounds.left) / imageBounds.width(), (cropRect.top - imageBounds.top) / imageBounds.height(),
+    (cropRect.right - imageBounds.left) / imageBounds.width(), (cropRect.bottom - imageBounds.top) / imageBounds.height())
+  private fun reportCrop() { val r = normalized(); onCropChanged?.invoke(r[0].coerceIn(0f, 1f), r[1].coerceIn(0f, 1f), r[2].coerceIn(0f, 1f), r[3].coerceIn(0f, 1f)) }
+  private fun RectF.geometry() = CropGeometry.Rect(left, top, right, bottom)
+  private fun CropGeometry.Rect.native() = RectF(left, top, right, bottom)
 }

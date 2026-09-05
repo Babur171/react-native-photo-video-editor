@@ -77,7 +77,9 @@ object PhotoLayerRenderer {
     if (uri != null) {
       resolver(uri)?.let { bitmap ->
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.alpha = alpha }
-        canvas.drawBitmap(bitmap, null, RectF(-size / 2, -size / 2, size / 2, size / 2), paint)
+        val aspect = layer.overlayAspectRatio?.takeIf { it > 0 } ?: (bitmap.width.toFloat() / bitmap.height)
+        val (width, height) = OverlayGeometry.stickerSize(shortSide, aspect)
+        canvas.drawBitmap(bitmap, null, RectF(-width / 2, -height / 2, width / 2, height / 2), paint)
         return
       }
     }

@@ -42,11 +42,7 @@ class PhotoEditSession(private val context: Context, sourceUri: String, maxPrevi
     val base = baseBitmap ?: return null
     val key = Pair(state, adjustments)
     cachedBaseBitmap?.let { if (cachedKey == key) return it }
-    val transformed = if (state.rotationDegrees == 0 && state.straightenDegrees == 0f) {
-      base
-    } else {
-      Bitmap.createBitmap(base, 0, 0, base.width, base.height, state.toMatrix(), true)
-    }
+    val transformed = PhotoTransformRenderer.transform(base, state)
     val adjusted = PhotoAdjustmentRenderer.apply(transformed, adjustments)
     cachedBaseBitmap = adjusted
     cachedKey = key
@@ -54,8 +50,10 @@ class PhotoEditSession(private val context: Context, sourceUri: String, maxPrevi
   }
 
   /** Renders rotate/straighten + adjustments + layers — the crop overlay draws the crop live on top of this. */
-  fun renderPreview(): Bitmap? {
-    val base = computeBase() ?: return null
+  fun renderPreview(cropping: Boolean = false): Bitmap? {
+    val transformed = computeBase() ?: return null
+    if (cropping) return transformed
+    val base = PhotoTransformRenderer.crop(transformed, state)
     val layers = layerStack.layers
     cachedPreviewBitmap?.let { cached ->
       if (cachedPreviewBase === base && cachedPreviewLayerRevision == layerStack.revision) return cached

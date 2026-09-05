@@ -11,7 +11,7 @@ enum LayerType {
 ///
 /// `x`/`y` are the layer's center, normalized 0..1 against the image.
 struct PhotoLayer {
-  let id: String
+  var id: String
   var type: LayerType
   var x: CGFloat = 0.5
   var y: CGFloat = 0.5
@@ -42,6 +42,14 @@ struct PhotoLayer {
   init(id: String = UUID().uuidString, type: LayerType) {
     self.id = id
     self.type = type
+  }
+
+  func duplicated() -> PhotoLayer {
+    var copy = self
+    copy.id = UUID().uuidString
+    copy.x = min(max(x + 0.04, 0), 1)
+    copy.y = min(max(y + 0.04, 0), 1)
+    return copy
   }
 
   /// True if this layer should be visible at `positionMs` against a video of `durationMs`. Always true for photo layers.

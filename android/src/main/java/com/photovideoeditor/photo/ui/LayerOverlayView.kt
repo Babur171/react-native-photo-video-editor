@@ -3,12 +3,13 @@ package com.photovideoeditor.photo.ui
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
 import android.text.TextPaint
+import com.photovideoeditor.R
+import com.photovideoeditor.photo.render.OverlayGeometry
 import com.photovideoeditor.photo.render.PhotoLayer
 import com.photovideoeditor.photo.render.LayerType
 import kotlin.math.atan2
@@ -27,6 +28,7 @@ class LayerOverlayView(context: Context) : View(context) {
     set(value) { field = value; invalidate() }
   var selectedLayerId: String? = null
     set(value) { field = value; invalidate() }
+  var onLayerDelete: ((String) -> Unit)? = null
   var onLayerTapped: ((String?) -> Unit)? = null
   var onLayerDoubleTapped: ((String) -> Unit)? = null
   var onLayerTransformChanged: ((id: String, x: Float, y: Float, scale: Float, rotationDegrees: Float) -> Unit)? = null
@@ -48,13 +50,10 @@ class LayerOverlayView(context: Context) : View(context) {
   private val handleRadius = 11f * density
   private val handleTouchRadius = 30f * density
   private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 2f * density
-    pathEffect = DashPathEffect(floatArrayOf(8f * density, 5f * density), 0f)
+    color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 1f * density
   }
   private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
-  private val handleGlyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    color = Color.rgb(87, 55, 245); style = Paint.Style.STROKE; strokeWidth = 2f * density
-  }
+
 
   fun setImageBounds(bounds: RectF) { imageBounds = RectF(bounds); invalidate() }
 
@@ -67,10 +66,22 @@ class LayerOverlayView(context: Context) : View(context) {
     canvas.translate(center.first, center.second)
     canvas.rotate(selected.rotationDegrees)
     canvas.drawRect(-half.first, -half.second, half.first, half.second, selectionPaint)
-    canvas.drawCircle(half.first, half.second, handleRadius, handlePaint)
-    val glyph = handleRadius * 0.52f
-    canvas.drawLine(half.first - glyph, half.second + glyph, half.first + glyph, half.second - glyph, handleGlyphPaint)
+    for ((x, y) in listOf(Pair(-half.first, -half.second), Pair(half.first, -half.second), Pair(-half.first, half.second), Pair(half.first, half.second))) {
+      canvas.drawCircle(x, y, 4f * density, handlePaint)
+    }
+    drawControl(canvas, -half.first, -half.second, R.drawable.ic_close, Color.rgb(255, 100, 115))
+    drawControl(canvas, half.first, half.second, R.drawable.ic_fullscreen, Color.rgb(167, 139, 250))
     canvas.restore()
+  }
+
+  private fun drawControl(canvas: Canvas, x: Float, y: Float, icon: Int, tint: Int) {
+    canvas.drawCircle(x, y, handleRadius, handlePaint)
+    context.getDrawable(icon)?.mutate()?.let { drawable ->
+      drawable.setTint(tint)
+      val size = (handleRadius * 0.7f).toInt()
+      drawable.setBounds(x.toInt() - size, y.toInt() - size, x.toInt() + size, y.toInt() + size)
+      drawable.draw(canvas)
+    }
   }
 
   override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -78,6 +89,13 @@ class LayerOverlayView(context: Context) : View(context) {
     when (event.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
         val selected = selectedLayer()
+        if (selected != null && !selected.locked) {
+          val handle = handlePoint(selected)
+          val center = centerOf(selected)
+          if (hypot(event.x - (2 * center.first - handle.first), event.y - (2 * center.second - handle.second)) <= handleTouchRadius) {
+            onLayerDelete?.invoke(selected.id); resetGesture(); return true
+          }
+        }
         val handleHit = selected?.takeIf { !it.locked && isHandleHit(it, event.x, event.y) }
         val hit = handleHit ?: hitTest(event.x, event.y)
         onLayerTapped?.invoke(hit?.id)
@@ -102,6 +120,7 @@ class LayerOverlayView(context: Context) : View(context) {
           val metrics = multiMetrics(event)
           startDistance = metrics.distance.coerceAtLeast(1f); startAngle = metrics.angle
           startMidX = metrics.midX; startMidY = metrics.midY
+          movedDuringGesture = true
           gesture = Gesture.MULTI
           return true
         }
@@ -143,7 +162,17 @@ class LayerOverlayView(context: Context) : View(context) {
         }
         finishGesture(); return true
       }
-      MotionEvent.ACTION_POINTER_UP -> return true
+      MotionEvent.ACTION_POINTER_UP -> {
+        // Rebase to the remaining finger so lifting a pinch finger does not jump/freeze the layer.
+        val remaining = if (event.actionIndex == 0) 1 else 0
+        if (remaining < event.pointerCount) {
+          startLayer = currentGestureLayer()?.copy()
+          startPointX = event.getX(remaining); startPointY = event.getY(remaining)
+          gesture = Gesture.DRAG
+        }
+        movedDuringGesture = true
+        return true
+      }
     }
     return false
   }
@@ -173,8 +202,8 @@ class LayerOverlayView(context: Context) : View(context) {
         Pair((lines.maxOfOrNull { paint.measureText(it) } ?: paint.textSize) / 2f + 8f * density, paint.fontSpacing * lines.size / 2f + 6f * density)
       }
       LayerType.STICKER -> {
-        val size = shortSide * 0.18f
-        Pair(size / 2f, size / 2f)
+        val (width, height) = OverlayGeometry.stickerSize(shortSide, layer.overlayAspectRatio ?: 1f)
+        Pair(width / 2f + 4f * density, height / 2f + 4f * density)
       }
       LayerType.OVERLAY -> {
         val aspect = layer.overlayAspectRatio ?: 1f
@@ -187,7 +216,7 @@ class LayerOverlayView(context: Context) : View(context) {
         Pair(maxX * imageBounds.width() + handleRadius, maxY * imageBounds.height() + handleRadius)
       }
     }
-    return Pair((base.first * layer.scale).coerceAtLeast(handleRadius), (base.second * layer.scale).coerceAtLeast(handleRadius))
+    return Pair((base.first * layer.scale).coerceAtLeast(24f * density), (base.second * layer.scale).coerceAtLeast(24f * density))
   }
 
   private fun handlePoint(layer: PhotoLayer): Pair<Float, Float> {

@@ -54,8 +54,9 @@ enum PhotoLayerRenderer {
 
   private static func drawSticker(_ layer: PhotoLayer, shortSide: CGFloat, resolver: (String) -> UIImage?) {
     let size = shortSide * 0.18
-    let rect = CGRect(x: -size / 2, y: -size / 2, width: size, height: size)
     if let uri = layer.stickerUri, let image = resolver(uri) {
+      let aspect = layer.overlayAspectRatio.flatMap { $0 > 0 ? $0 : nil } ?? (image.size.width / max(image.size.height, 1))
+      let rect = CGRect(x: -size / 2, y: -size / (2 * aspect), width: size, height: size / aspect)
       image.draw(in: rect, blendMode: .normal, alpha: layer.opacity)
       return
     }

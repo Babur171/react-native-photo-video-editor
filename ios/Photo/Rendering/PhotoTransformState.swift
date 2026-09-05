@@ -12,6 +12,11 @@ struct PhotoTransformState: Equatable {
   var rotationDegrees: Int = 0
   var straightenDegrees: CGFloat = 0
   var aspectRatio: CGFloat?
+  var aspectPreset = "Free"
+  // Zoom/pan are viewport metadata; normalized crop coordinates already encode them for export.
+  var zoom: CGFloat = 1
+  var panX: CGFloat = 0
+  var panY: CGFloat = 0
 
   var isIdentity: Bool {
     cropLeft == 0 && cropTop == 0 && cropRight == 1 && cropBottom == 1 &&

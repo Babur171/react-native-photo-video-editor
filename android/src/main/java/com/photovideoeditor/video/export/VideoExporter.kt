@@ -10,6 +10,7 @@ import android.os.Looper
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.OverlaySettings
 import androidx.media3.common.util.Size
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.Brightness
@@ -18,6 +19,7 @@ import androidx.media3.effect.HslAdjustment
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.ScaleAndRotateTransformation
+import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -28,6 +30,7 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import com.photovideoeditor.files.SourceResolver
+import com.photovideoeditor.photo.render.OverlayGeometry
 import com.photovideoeditor.photo.render.PhotoLayer
 import com.photovideoeditor.photo.render.PhotoLayerRenderer
 import com.photovideoeditor.video.render.VideoClip
@@ -120,6 +123,8 @@ class VideoExporter(private val context: Context) {
         effects.add(Presentation.createForAspectRatio(ratio, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
       }
 
+      effects.addAll(com.photovideoeditor.video.render.VideoCropEffects.create(state.crop))
+
       // Video-level filters: export-only for now, no live preview — see docs/video-editor.md.
       if (state.brightness != 0f) effects.add(Brightness(state.brightness / 100f))
       if (state.contrast != 0f) effects.add(Contrast(state.contrast / 100f))
@@ -148,19 +153,36 @@ class VideoExporter(private val context: Context) {
               object : BitmapOverlay() {
                 @Volatile private var outputWidth = sourceWidth.coerceAtLeast(2)
                 @Volatile private var outputHeight = sourceHeight.coerceAtLeast(2)
+                @Volatile private var settings: OverlaySettings = StaticOverlaySettings.Builder().build()
 
                 override fun configure(videoSize: Size) {
                   super.configure(videoSize)
-                  // Media3 maps a same-aspect overlay texture onto the complete background
-                  // frame. Bound the longest edge to avoid allocating a huge ARGB bitmap for
-                  // extreme (4K/8K) outputs, while preserving exact normalized geometry. The
-                  // cap is set to cover common Full HD exports (1920px long edge) natively —
-                  // a lower cap visibly softens overlay text/sticker edges vs. the preview,
-                  // since it downscales the overlay before compositing.
-                  val scale = minOf(1f, MAX_OVERLAY_EDGE_PX / maxOf(videoSize.width, videoSize.height).coerceAtLeast(1))
-                  outputWidth = (videoSize.width * scale).toInt().coerceAtLeast(2)
-                  outputHeight = (videoSize.height * scale).toInt().coerceAtLeast(2)
+                  // Media3 composites an overlay texture **1:1 in pixels, centred** on the frame — it
+                  // does NOT stretch it to fill (that is what iOS's `contentsGravity = .resizeAspect`
+                  // does, which is why only Android was affected). Verified against the 1.8.0 bytecode
+                  // of `OverlayMatrixProvider.getTransformationMatrix`: with default anchors/rotation
+                  // its matrix chain collapses to
+                  //     net scale = (overlaySize / frameSize) * OverlaySettings.scale
+                  // (the inner scale/scaleInv pair only exists to apply the anchor offset in unscaled
+                  // space; the chain multiplies by `scaleMatrix` once more at the end).
+                  //
+                  // `PhotoLayerRenderer` draws in coordinates normalized to the bitmap it is handed,
+                  // so an overlay bitmap smaller than the frame made every layer render *smaller and
+                  // pulled toward the frame centre* by exactly the shortfall — e.g. a 4K export
+                  // (3840px long edge) downscaled to a 1920px overlay put every sticker/text at half
+                  // its preview size. Videos at or under the cap were unaffected, which is why this
+                  // only reproduced on high-resolution sources.
+                  //
+                  // Fix: keep the memory cap, but tell Media3 to scale the overlay back up to the
+                  // full frame. The compensation divides by the *rounded* bitmap size actually
+                  // allocated (not the pre-rounding ratio) so rounding cannot reintroduce drift.
+                  val plan = OverlayGeometry.canvasPlan(videoSize.width, videoSize.height, MAX_OVERLAY_EDGE_PX)
+                  outputWidth = plan.width
+                  outputHeight = plan.height
+                  settings = StaticOverlaySettings.Builder().setScale(plan.scaleX, plan.scaleY).build()
                 }
+
+                override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = settings
 
                 override fun getBitmap(presentationTimeUs: Long): Bitmap {
                   val positionMs = presentationTimeUs / 1000 + clipOffsetMs
@@ -313,7 +335,12 @@ class VideoExporter(private val context: Context) {
   }
 
   private companion object {
-    /** Overlay-compositing bitmap longest-edge cap; see the comment at its call site. */
-    const val MAX_OVERLAY_EDGE_PX = 1920f
+    /**
+     * Overlay-compositing bitmap longest-edge cap — purely a memory guard (an ARGB_8888 bitmap this
+     * size is allocated twice transiently while rendering). Geometry no longer depends on it: any
+     * shortfall is scaled back to the full frame via `OverlaySettings` (see the `configure` comment),
+     * so the cap only trades overlay sharpness for peak memory on above-1440p exports.
+     */
+    const val MAX_OVERLAY_EDGE_PX = 2560f
   }
 }

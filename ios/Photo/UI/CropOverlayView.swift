@@ -1,198 +1,125 @@
 import UIKit
 
-/// Draws a draggable/resizable crop rectangle over `imageBounds` (the
-/// on-screen rect of the preview image, in this view's own coordinate space)
-/// and reports the crop edges back normalized to that rect via `onCropChanged`.
+/// Handle gestures resize the box; interior gestures pan/pinch the media, keeping the box fixed.
 final class CropOverlayView: UIView {
-  var onCropChanged: ((_ left: CGFloat, _ top: CGFloat, _ right: CGFloat, _ bottom: CGFloat) -> Void)?
-
-  private var imageBounds: CGRect = .zero
-  private var cropRect: CGRect = .zero
+  var onCropChanged: ((CGFloat, CGFloat, CGFloat, CGFloat) -> Void)?
+  var onMediaBoundsChanged: ((CGRect) -> Void)?
+  var onViewportChanged: ((CGFloat, CGFloat, CGFloat) -> Void)?
+  private var imageBounds = CGRect.zero, fittedBounds = CGRect.zero, cropRect = CGRect.zero
   private var aspectRatio: CGFloat?
-
-  private let dimLayer = CAShapeLayer()
-  private let borderLayer = CAShapeLayer()
-  private let handlesLayer = CAShapeLayer()
-  private let handleRadius: CGFloat = 32
-  private let minSize: CGFloat = 60
-
-  private enum Handle { case move, top, right, bottom, left, topLeft, topRight, bottomLeft, bottomRight }
-  private var activeHandle: Handle?
-  private var lastPoint: CGPoint = .zero
+  private var activeHandle: CropGeometry.Handle?
+  private var primary: UITouch?, secondary: UITouch?
+  private var lastPoint = CGPoint.zero
+  private var lastDistance: CGFloat = 0
 
   override init(frame: CGRect) {
-    super.init(frame: frame)
-    backgroundColor = .clear
-    dimLayer.fillRule = .evenOdd
-    dimLayer.fillColor = UIColor.black.withAlphaComponent(0.6).cgColor
-    layer.addSublayer(dimLayer)
-    borderLayer.strokeColor = UIColor.white.cgColor
-    borderLayer.fillColor = UIColor.clear.cgColor
-    borderLayer.lineWidth = 2
-    layer.addSublayer(borderLayer)
-    handlesLayer.fillColor = UIColor.white.cgColor
-    layer.addSublayer(handlesLayer)
+    super.init(frame: frame); backgroundColor = .clear; isOpaque = false; isMultipleTouchEnabled = true
   }
-
   required init?(coder: NSCoder) { nil }
 
-  /// Sets the on-screen image rect this overlay crops against. Resets the crop to full-frame when `resetCrop` is true.
+  func restore(bounds: CGRect, state: PhotoTransformState) {
+    guard bounds.width > 0, bounds.height > 0 else { return }
+    fittedBounds = bounds
+    let zoom = max(1, min(8, state.zoom))
+    let cx = bounds.midX + state.panX*bounds.width, cy = bounds.midY + state.panY*bounds.height
+    imageBounds = CGRect(x: cx-bounds.width*zoom/2, y: cy-bounds.height*zoom/2, width: bounds.width*zoom, height: bounds.height*zoom)
+    aspectRatio = state.aspectRatio
+    setCrop(left: state.cropLeft, top: state.cropTop, right: state.cropRight, bottom: state.cropBottom)
+    onMediaBoundsChanged?(imageBounds)
+  }
   func setImageBounds(_ bounds: CGRect, resetCrop: Bool) {
-    imageBounds = bounds
-    if resetCrop || cropRect.width <= 0 || cropRect.height <= 0 {
-      cropRect = bounds
-      reportCrop()
-    }
-    setNeedsLayout()
+    let old = normalized()
+    imageBounds = bounds; fittedBounds = bounds
+    if resetCrop || cropRect.isEmpty { cropRect = bounds }
+    else { setCrop(left: old.minX, top: old.minY, right: old.maxX, bottom: old.maxY) }
+    setNeedsDisplay()
   }
-
-  /// Restores a normalized crop rectangle, used when reopening or cancelling crop mode.
   func setCrop(left: CGFloat, top: CGFloat, right: CGFloat, bottom: CGFloat) {
-    guard imageBounds.width > 0, imageBounds.height > 0 else { return }
-    cropRect = CGRect(
-      x: imageBounds.minX + left * imageBounds.width,
-      y: imageBounds.minY + top * imageBounds.height,
-      width: (right - left) * imageBounds.width,
-      height: (bottom - top) * imageBounds.height
-    )
-    clampToImageBounds(); setNeedsLayout()
+    cropRect = CGRect(x: imageBounds.minX+left*imageBounds.width, y: imageBounds.minY+top*imageBounds.height,
+      width: (right-left)*imageBounds.width, height: (bottom-top)*imageBounds.height)
+    setNeedsDisplay()
   }
-
   func setAspectRatio(_ ratio: CGFloat?) {
     aspectRatio = ratio
-    if let ratio, imageBounds.width > 0, imageBounds.height > 0 {
-      let center = CGPoint(x: cropRect.midX, y: cropRect.midY)
-      var width = cropRect.width
-      var height = width / ratio
-      if height > imageBounds.height {
-        height = cropRect.height
-        width = height * ratio
-      }
-      cropRect = CGRect(x: center.x - width / 2, y: center.y - height / 2, width: width, height: height)
-      clampToImageBounds()
-      setNeedsLayout()
-    }
-    reportCrop()
+    cropRect = CropGeometry.fit(imageBounds.intersection(bounds), ratio: ratio)
+    reportCrop(); setNeedsDisplay()
   }
 
-  override func layoutSublayers(of layer: CALayer) {
-    super.layoutSublayers(of: layer)
-    guard imageBounds.width > 0, imageBounds.height > 0 else { return }
-    let outerPath = UIBezierPath(rect: imageBounds)
-    outerPath.append(UIBezierPath(rect: cropRect).reversing())
-    dimLayer.path = outerPath.cgPath
-
-    let borderPath = UIBezierPath(rect: cropRect)
-    let thirdWidth = cropRect.width / 3
-    let thirdHeight = cropRect.height / 3
-    for index in 1...2 {
-      let x = cropRect.minX + thirdWidth * CGFloat(index)
-      borderPath.move(to: CGPoint(x: x, y: cropRect.minY))
-      borderPath.addLine(to: CGPoint(x: x, y: cropRect.maxY))
-      let y = cropRect.minY + thirdHeight * CGFloat(index)
-      borderPath.move(to: CGPoint(x: cropRect.minX, y: y))
-      borderPath.addLine(to: CGPoint(x: cropRect.maxX, y: y))
+  override func draw(_ rect: CGRect) {
+    guard !cropRect.isEmpty, let context = UIGraphicsGetCurrentContext() else { return }
+    let shade = UIBezierPath(rect: bounds); shade.append(UIBezierPath(rect: cropRect)); shade.usesEvenOddFillRule = true
+    UIColor.black.withAlphaComponent(0.65).setFill(); shade.fill()
+    context.setStrokeColor(UIColor.white.cgColor); context.setLineWidth(1); context.stroke(cropRect)
+    context.setStrokeColor(UIColor.white.withAlphaComponent(0.33).cgColor); context.setLineWidth(0.5)
+    for i in 1...2 {
+      let x = cropRect.minX+cropRect.width*CGFloat(i)/3, y = cropRect.minY+cropRect.height*CGFloat(i)/3
+      context.move(to: CGPoint(x:x,y:cropRect.minY)); context.addLine(to:CGPoint(x:x,y:cropRect.maxY))
+      context.move(to: CGPoint(x:cropRect.minX,y:y)); context.addLine(to:CGPoint(x:cropRect.maxX,y:y))
     }
-    borderLayer.path = borderPath.cgPath
-
-    let handlesPath = UIBezierPath()
-    let points = [
-      CGPoint(x: cropRect.minX, y: cropRect.minY), CGPoint(x: cropRect.midX, y: cropRect.minY),
-      CGPoint(x: cropRect.maxX, y: cropRect.minY), CGPoint(x: cropRect.maxX, y: cropRect.midY),
-      CGPoint(x: cropRect.maxX, y: cropRect.maxY), CGPoint(x: cropRect.midX, y: cropRect.maxY),
-      CGPoint(x: cropRect.minX, y: cropRect.maxY), CGPoint(x: cropRect.minX, y: cropRect.midY),
-    ]
-    points.forEach { point in handlesPath.append(UIBezierPath(ovalIn: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))) }
-    handlesLayer.path = handlesPath.cgPath
+    context.strokePath(); context.setStrokeColor(UIColor.white.cgColor); context.setLineWidth(3); context.setLineCap(.round)
+    for x in [cropRect.minX,cropRect.maxX] {
+      for y in [cropRect.minY,cropRect.maxY] {
+        context.move(to: CGPoint(x:x+(x == cropRect.minX ? 14 : -14),y:y)); context.addLine(to:CGPoint(x:x,y:y))
+        context.addLine(to: CGPoint(x:x,y:y+(y == cropRect.minY ? 14 : -14)))
+      }
+    }
+    for y in [cropRect.minY,cropRect.maxY] { context.move(to:CGPoint(x:cropRect.midX-8,y:y)); context.addLine(to:CGPoint(x:cropRect.midX+8,y:y)) }
+    for x in [cropRect.minX,cropRect.maxX] { context.move(to:CGPoint(x:x,y:cropRect.midY-8)); context.addLine(to:CGPoint(x:x,y:cropRect.midY+8)) }
+    context.strokePath()
   }
 
   override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-    guard let point = touches.first?.location(in: self) else { return }
-    activeHandle = hitTest(point)
-    lastPoint = point
+    for touch in touches { if primary == nil { primary = touch } else if secondary == nil { secondary = touch } }
+    guard let primary else { return }
+    if secondary != nil { activeHandle = nil } else { activeHandle = hitHandle(primary.location(in:self)) }
+    let metrics = touchMetrics(); lastPoint = metrics.0; lastDistance = metrics.1
   }
-
   override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-    guard let handle = activeHandle, let point = touches.first?.location(in: self) else { return }
-    let dx = point.x - lastPoint.x
-    let dy = point.y - lastPoint.y
-    lastPoint = point
-    applyDrag(handle, dx: dx, dy: dy)
-    setNeedsLayout()
-    reportCrop()
-  }
-
-  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { activeHandle = nil }
-  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { activeHandle = nil }
-
-  private func hitTest(_ point: CGPoint) -> Handle? {
-    func near(_ target: CGPoint) -> Bool {
-      abs(point.x - target.x) < handleRadius && abs(point.y - target.y) < handleRadius
+    guard primary != nil, imageBounds.width > 0 else { return }
+    let (point,distance) = touchMetrics(), dx = point.x-lastPoint.x, dy = point.y-lastPoint.y
+    if let activeHandle {
+      cropRect = CropGeometry.resize(cropRect, bounds: imageBounds.intersection(bounds), handle: activeHandle, dx: dx, dy: dy, ratio: aspectRatio, minimum: 48)
+    } else {
+      moveMedia(dx:dx,dy:dy,factor:lastDistance > 0 && distance > 0 ? distance/lastDistance : 1,focus:point)
     }
-    if near(CGPoint(x: cropRect.minX, y: cropRect.minY)) { return .topLeft }
-    if near(CGPoint(x: cropRect.maxX, y: cropRect.minY)) { return .topRight }
-    if near(CGPoint(x: cropRect.minX, y: cropRect.maxY)) { return .bottomLeft }
-    if near(CGPoint(x: cropRect.maxX, y: cropRect.maxY)) { return .bottomRight }
-    if near(CGPoint(x: cropRect.midX, y: cropRect.minY)) { return .top }
-    if near(CGPoint(x: cropRect.maxX, y: cropRect.midY)) { return .right }
-    if near(CGPoint(x: cropRect.midX, y: cropRect.maxY)) { return .bottom }
-    if near(CGPoint(x: cropRect.minX, y: cropRect.midY)) { return .left }
-    if cropRect.contains(point) { return .move }
-    return nil
+    lastPoint = point; lastDistance = distance; reportCrop(); setNeedsDisplay()
   }
+  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+    if let secondary, touches.contains(secondary) { self.secondary = nil }
+    if let primary, touches.contains(primary) { self.primary = secondary; secondary = nil }
+    let metrics = touchMetrics(); lastPoint = metrics.0; lastDistance = metrics.1
+    if primary == nil { activeHandle = nil }
+  }
+  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { primary = nil; secondary = nil; activeHandle = nil }
 
-  private func applyDrag(_ handle: Handle, dx: CGFloat, dy: CGFloat) {
-    var rect = cropRect
-    switch handle {
-    case .move:
-      rect = rect.offsetBy(dx: dx, dy: dy)
-    case .topLeft:
-      rect = CGRect(x: rect.minX + dx, y: rect.minY + dy, width: rect.width - dx, height: rect.height - dy)
-    case .topRight:
-      rect = CGRect(x: rect.minX, y: rect.minY + dy, width: rect.width + dx, height: rect.height - dy)
-    case .bottomLeft:
-      rect = CGRect(x: rect.minX + dx, y: rect.minY, width: rect.width - dx, height: rect.height + dy)
-    case .bottomRight:
-      rect = CGRect(x: rect.minX, y: rect.minY, width: rect.width + dx, height: rect.height + dy)
-    case .top: rect = CGRect(x: rect.minX, y: rect.minY + dy, width: rect.width, height: rect.height - dy)
-    case .right: rect.size.width += dx
-    case .bottom: rect.size.height += dy
-    case .left: rect = CGRect(x: rect.minX + dx, y: rect.minY, width: rect.width - dx, height: rect.height)
-    }
-    guard rect.width >= minSize, rect.height >= minSize else { return }
-    if let ratio = aspectRatio {
-      switch handle {
-      case .topLeft, .bottomLeft, .bottomRight:
-        rect.size.height = rect.width / ratio
-      case .topRight:
-        let newHeight = rect.width / ratio
-        rect.origin.y = cropRect.maxY - newHeight
-        rect.size.height = newHeight
-      case .move:
-        break
-      case .left, .right:
-        let centerY = cropRect.midY; rect.size.height = rect.width / ratio; rect.origin.y = centerY - rect.height / 2
-      case .top, .bottom:
-        let centerX = cropRect.midX; rect.size.width = rect.height * ratio; rect.origin.x = centerX - rect.width / 2
-      }
-    }
-    cropRect = rect
-    clampToImageBounds()
+  private func moveMedia(dx:CGFloat,dy:CGFloat,factor:CGFloat,focus:CGPoint) {
+    let minimum = max(1,max(cropRect.width/fittedBounds.width,cropRect.height/fittedBounds.height))
+    let zoom = imageBounds.width/fittedBounds.width
+    let scale = max(minimum,min(max(8,minimum),zoom*factor))/zoom
+    let w = imageBounds.width*scale, h = imageBounds.height*scale
+    let x = max(cropRect.maxX-w,min(cropRect.minX,focus.x+(imageBounds.minX-focus.x)*scale+dx))
+    let y = max(cropRect.maxY-h,min(cropRect.minY,focus.y+(imageBounds.minY-focus.y)*scale+dy))
+    imageBounds = CGRect(x:x,y:y,width:w,height:h)
+    onMediaBoundsChanged?(imageBounds)
+    onViewportChanged?(w/fittedBounds.width,(imageBounds.midX-fittedBounds.midX)/fittedBounds.width,(imageBounds.midY-fittedBounds.midY)/fittedBounds.height)
   }
-
-  private func clampToImageBounds() {
-    if cropRect.minX < imageBounds.minX { cropRect.origin.x = imageBounds.minX }
-    if cropRect.minY < imageBounds.minY { cropRect.origin.y = imageBounds.minY }
-    if cropRect.maxX > imageBounds.maxX { cropRect.origin.x = imageBounds.maxX - cropRect.width }
-    if cropRect.maxY > imageBounds.maxY { cropRect.origin.y = imageBounds.maxY - cropRect.height }
+  private func touchMetrics() -> (CGPoint,CGFloat) {
+    guard let a = primary?.location(in:self) else { return (.zero,0) }
+    guard let b = secondary?.location(in:self) else { return (a,0) }
+    return (CGPoint(x:(a.x+b.x)/2,y:(a.y+b.y)/2),hypot(a.x-b.x,a.y-b.y))
   }
-
-  private func reportCrop() {
-    guard imageBounds.width > 0, imageBounds.height > 0 else { return }
-    let left = (cropRect.minX - imageBounds.minX) / imageBounds.width
-    let top = (cropRect.minY - imageBounds.minY) / imageBounds.height
-    let right = (cropRect.maxX - imageBounds.minX) / imageBounds.width
-    let bottom = (cropRect.maxY - imageBounds.minY) / imageBounds.height
-    onCropChanged?(left, top, right, bottom)
+  private func hitHandle(_ p:CGPoint) -> CropGeometry.Handle? {
+    let points: [(CGPoint,CropGeometry.Handle)] = [
+      (CGPoint(x:cropRect.minX,y:cropRect.minY),.topLeft),(CGPoint(x:cropRect.maxX,y:cropRect.minY),.topRight),
+      (CGPoint(x:cropRect.minX,y:cropRect.maxY),.bottomLeft),(CGPoint(x:cropRect.maxX,y:cropRect.maxY),.bottomRight),
+      (CGPoint(x:cropRect.midX,y:cropRect.minY),.top),(CGPoint(x:cropRect.maxX,y:cropRect.midY),.right),
+      (CGPoint(x:cropRect.midX,y:cropRect.maxY),.bottom),(CGPoint(x:cropRect.minX,y:cropRect.midY),.left)]
+    guard let nearest = points.min(by: { hypot(p.x-$0.0.x,p.y-$0.0.y) < hypot(p.x-$1.0.x,p.y-$1.0.y) }), hypot(p.x-nearest.0.x,p.y-nearest.0.y) <= 24 else { return nil }
+    return nearest.1
   }
+  private func normalized() -> CGRect {
+    guard imageBounds.width > 0,imageBounds.height > 0 else { return CGRect(x:0,y:0,width:1,height:1) }
+    return CGRect(x:(cropRect.minX-imageBounds.minX)/imageBounds.width,y:(cropRect.minY-imageBounds.minY)/imageBounds.height,width:cropRect.width/imageBounds.width,height:cropRect.height/imageBounds.height)
+  }
+  private func reportCrop() { let r = normalized(); onCropChanged?(max(0,r.minX),max(0,r.minY),min(1,r.maxX),min(1,r.maxY)) }
 }

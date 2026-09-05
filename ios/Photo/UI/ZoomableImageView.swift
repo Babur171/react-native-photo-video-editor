@@ -1,4 +1,5 @@
 import UIKit
+import AVFoundation
 
 /// UIImageView supporting pinch-to-zoom and single-finger pan for the photo
 /// preview, reporting the current on-screen image rect via `onBoundsChanged`
@@ -14,6 +15,7 @@ final class ZoomableImageView: UIImageView {
 
   private let pinchRecognizer = UIPinchGestureRecognizer()
   private let panRecognizer = UIPanGestureRecognizer()
+  private var lastLayoutSize: CGSize = .zero
   private var minScale: CGFloat = 1
   private var maxScale: CGFloat = 4
 
@@ -37,12 +39,28 @@ final class ZoomableImageView: UIImageView {
     reportBounds()
   }
 
+  func setRenderedBounds(_ target: CGRect) {
+    guard let image, bounds.width > 0, bounds.height > 0 else { return }
+    let fitted = AVMakeRect(aspectRatio: image.size, insideRect: bounds)
+    let scale = target.width / max(fitted.width, 0.001)
+    transform = CGAffineTransform(translationX: target.midX - center.x, y: target.midY - center.y).scaledBy(x: scale, y: scale)
+  }
+
   func currentImageBounds() -> CGRect {
     guard let image = image, bounds.width > 0, bounds.height > 0, image.size.width > 0, image.size.height > 0 else { return bounds }
     let scale = min(bounds.width / image.size.width, bounds.height / image.size.height)
     let fittedSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
     let origin = CGPoint(x: (bounds.width - fittedSize.width) / 2, y: (bounds.height - fittedSize.height) / 2)
-    return CGRect(origin: origin, size: fittedSize).applying(transform)
+    let rect = CGRect(origin: origin, size: fittedSize)
+    return superview.map { convert(rect, to: $0) } ?? rect
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    if bounds.size != lastLayoutSize {
+      lastLayoutSize = bounds.size
+      resetToFit()
+    }
   }
 
   private func reportBounds() {

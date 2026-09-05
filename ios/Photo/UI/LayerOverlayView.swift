@@ -8,6 +8,7 @@ final class LayerOverlayView: UIView {
   var maxScale: CGFloat = 8
   var layers: [PhotoLayer] = [] { didSet { setNeedsDisplay() } }
   var selectedLayerID: String? { didSet { setNeedsDisplay() } }
+  var onLayerDelete: ((String) -> Void)?
   var onLayerTapped: ((String?) -> Void)?
   var onLayerDoubleTapped: ((String) -> Void)?
   var onLayerTransformChanged: ((_ id: String, _ x: CGFloat, _ y: CGFloat, _ scale: CGFloat, _ rotationDegrees: CGFloat) -> Void)?
@@ -42,17 +43,22 @@ final class LayerOverlayView: UIView {
     context.translateBy(x: center.x, y: center.y)
     context.rotate(by: layer.rotationDegrees * .pi / 180)
     context.setStrokeColor(UIColor.white.cgColor)
-    context.setLineWidth(2)
-    context.setLineDash(phase: 0, lengths: [8, 5])
+    context.setLineWidth(1)
     context.stroke(CGRect(x: -half.width, y: -half.height, width: half.width * 2, height: half.height * 2))
     context.setLineDash(phase: 0, lengths: [])
     context.setFillColor(UIColor.white.cgColor)
-    context.fillEllipse(in: CGRect(x: half.width - handleRadius, y: half.height - handleRadius, width: handleRadius * 2, height: handleRadius * 2))
-    context.setStrokeColor(UIColor(red: 87/255, green: 55/255, blue: 245/255, alpha: 1).cgColor)
-    context.setLineWidth(2)
-    let glyph = handleRadius * 0.52
-    context.move(to: CGPoint(x: half.width - glyph, y: half.height + glyph)); context.addLine(to: CGPoint(x: half.width + glyph, y: half.height - glyph)); context.strokePath()
+    for point in [CGPoint(x: -half.width, y: -half.height), CGPoint(x: half.width, y: -half.height), CGPoint(x: -half.width, y: half.height), CGPoint(x: half.width, y: half.height)] {
+      context.fillEllipse(in: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
+    }
+    drawControl(context, point: CGPoint(x: -half.width, y: -half.height), symbol: "xmark", tint: .systemRed)
+    drawControl(context, point: CGPoint(x: half.width, y: half.height), symbol: "arrow.up.left.and.arrow.down.right", tint: DesignTokens.primary)
     context.restoreGState()
+  }
+
+  private func drawControl(_ context: CGContext, point: CGPoint, symbol: String, tint: UIColor) {
+    context.setFillColor(UIColor.white.cgColor)
+    context.fillEllipse(in: CGRect(x: point.x - handleRadius, y: point.y - handleRadius, width: handleRadius * 2, height: handleRadius * 2))
+    UIImage(systemName: symbol)?.withTintColor(tint, renderingMode: .alwaysOriginal).draw(in: CGRect(x: point.x - 7, y: point.y - 7, width: 14, height: 14))
   }
 
   override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -71,6 +77,11 @@ final class LayerOverlayView: UIView {
       return
     }
     let selected = selectedLayer()
+    if let selected, !selected.locked {
+      let center = center(of: selected); let handle = handlePoint(selected)
+      let deletePoint = CGPoint(x: center.x * 2 - handle.x, y: center.y * 2 - handle.y)
+      if distance(deletePoint, point) <= handleTouchRadius { onLayerDelete?(selected.id); resetGesture(); return }
+    }
     let handleHit = selected.flatMap { !$0.locked && isHandleHit($0, point) ? $0 : nil }
     let hit = handleHit ?? hitTest(point)
     onLayerTapped?(hit?.id)
@@ -117,7 +128,13 @@ final class LayerOverlayView: UIView {
   private func endTouches(_ touches: Set<UITouch>) {
     let endedPrimary = primaryTouch.map { touches.contains($0) } ?? false
     let endedSecondary = secondaryTouch.map { touches.contains($0) } ?? false
-    if endedPrimary || endedSecondary { finishGesture() }
+    if endedPrimary || endedSecondary {
+      let remaining = endedPrimary ? secondaryTouch : primaryTouch
+      if let remaining, !touches.contains(remaining), let layer = currentGestureLayer() {
+        primaryTouch = remaining; secondaryTouch = nil
+        startLayer = layer; startPoint = remaining.location(in: self); gesture = .drag
+      } else { finishGesture() }
+    }
   }
   private func emit(_ layer: PhotoLayer, x: CGFloat, y: CGFloat, scale: CGFloat, rotation: CGFloat) {
     onLayerTransformChanged?(layer.id, x, y, scale, rotation)
@@ -145,7 +162,7 @@ final class LayerOverlayView: UIView {
     case .sticker:
       // Mirrors `PhotoLayerRenderer.drawSticker`'s `shortSide * 0.18` box (half-extent = 0.09).
       let half = shortSide * 0.09
-      base = CGSize(width: half, height: half)
+      base = CGSize(width: half + 4, height: half / max(layer.overlayAspectRatio ?? 1, 0.001) + 4)
     case .overlay:
       // Mirrors `PhotoLayerRenderer.drawOverlay`'s box: full canvas width, height from aspect ratio.
       let aspectRatio = layer.overlayAspectRatio.flatMap { $0 > 0 ? $0 : nil } ?? 1
@@ -155,7 +172,7 @@ final class LayerOverlayView: UIView {
       let maxY = layer.drawPoints.map { abs($0.1) }.max() ?? 0.08
       base = CGSize(width: maxX * imageBounds.width + handleRadius, height: maxY * imageBounds.height + handleRadius)
     }
-    return CGSize(width: max(handleRadius, base.width * layer.scale), height: max(handleRadius, base.height * layer.scale))
+    return CGSize(width: max(24, base.width * layer.scale), height: max(24, base.height * layer.scale))
   }
   private func handlePoint(_ layer: PhotoLayer) -> CGPoint {
     let center = center(of: layer); let half = selectionHalfExtents(layer); let radians = layer.rotationDegrees * .pi / 180

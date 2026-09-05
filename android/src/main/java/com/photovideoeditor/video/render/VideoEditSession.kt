@@ -17,6 +17,10 @@ import java.io.File
  * clip list again to produce the exported file.
  */
 class VideoEditSession(context: Context, val sourceUri: String) {
+  var sourceWidth = 0
+    private set
+  var sourceHeight = 0
+    private set
   val player: ExoPlayer = ExoPlayer.Builder(context).build()
 
   /** Text/sticker/shape overlays. Reuses the photo layer model/stack — see `PhotoLayer.startMs`/`endMs` for timing. */
@@ -49,6 +53,12 @@ class VideoEditSession(context: Context, val sourceUri: String) {
 
   init {
     player.addListener(object : Player.Listener {
+      override fun onVideoSizeChanged(size: androidx.media3.common.VideoSize) {
+        if (sourceWidth == 0 && size.width > 0 && size.height > 0) {
+          sourceWidth = (size.width * size.pixelWidthHeightRatio).toInt()
+          sourceHeight = size.height
+        }
+      }
       override fun onPlaybackStateChanged(playbackState: Int) {
         if (playbackState == Player.STATE_READY && !initialTimelineCreated && player.duration > 0) {
           initialTimelineCreated = true
