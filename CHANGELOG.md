@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.2.1
+
+- Fix an iOS build failure in `TextEditorSheet`: its private stored property `editing` collided with `UIViewController.isEditing`, which is exported to Objective-C as `editing`, so the compiler treated it as an invalid override ("cannot override with a stored property" / "overriding property must be as accessible as its enclosing type"). The property is now `isEditingExisting`; the `editing:` initialiser label is unchanged, so call sites are unaffected.
+
 ## 0.2.0
 
 - Fix video export placing text/sticker overlays at the wrong size and position on Android. Media3 composites an overlay texture 1:1 in pixels rather than stretching it to fill the frame, so the overlay bitmap's resolution cap shrank every layer toward the frame centre on sources above the cap (4K/1440p); 1080p and below were unaffected. The overlay canvas is now scaled back to the full frame via `OverlaySettings`, making preview and export match at any resolution. iOS was never affected (its `CALayer` scales to fit).
