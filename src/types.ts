@@ -61,7 +61,7 @@ export interface FontAsset {
 /** A consumer-provided sticker image, selectable from the Stickers tool. */
 export interface StickerAsset {
   /** Stable identifier, echoed back on layers created from this asset. */ id: string;
-  /** Sticker image URI. Supports HTTPS URLs and local device file/content URIs. */ uri: string;
+  /** Sticker image URI. Supports HTTPS URLs, local device file/content URIs, and data:image/png;base64 URIs. */ uri: string;
 }
 /** Options accepted by {@link openEditor}. */
 export interface EditorOptions {
@@ -70,6 +70,7 @@ export interface EditorOptions {
   /** Native UI theme. */ theme?: EditorTheme;
   /** Export preferences. */ export?: ExportOptions;
   /** Requests saving to the gallery. Currently ignored by the placeholder. */ saveToGallery?: boolean;
+  /** ID in stickerAssets to insert at the media center when the editor opens. */ initialStickerId?: string;
   /** Consumer-provided stickers offered by the Stickers tool, in addition to the small built-in set and end-user uploads. */ stickerAssets?: StickerAsset[];
   /** Consumer-provided fonts selectable from the Text tool. */ fonts?: FontAsset[];
 }

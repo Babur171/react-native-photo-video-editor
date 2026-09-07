@@ -15,6 +15,7 @@ final class PhotoVideoEditorViewController: UIViewController {
   private let features: [String: Any]
   private let theme: [String: Any]
   private let exportOptions: [String: Any]
+  private let initialStickerId: String?
   private let stickerAssets: [[String: Any]]
   var completion: ((PhotoVideoEditorOutcome) -> Void)?
 
@@ -114,7 +115,8 @@ final class PhotoVideoEditorViewController: UIViewController {
     features: [String: Any],
     theme: [String: Any] = [:],
     exportOptions: [String: Any] = [:],
-    stickerAssets: [[String: Any]] = []
+    stickerAssets: [[String: Any]] = [],
+    initialStickerId: String? = nil
   ) {
     self.uri = uri
     self.mediaType = mediaType
@@ -122,6 +124,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     self.theme = theme
     self.exportOptions = exportOptions
     self.stickerAssets = stickerAssets
+    self.initialStickerId = initialStickerId
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .fullScreen
   }
@@ -150,6 +153,25 @@ final class PhotoVideoEditorViewController: UIViewController {
       buildPhotoEditor()
     } else {
       buildVideoEditor()
+    }
+    insertInitialSticker()
+  }
+
+  private func insertInitialSticker() {
+    guard let id = initialStickerId,
+          let asset = consumerStickerAssets().first(where: { $0.id == id }) else { return }
+    view.isUserInteractionEnabled = false
+    let loader = OnlineStickerSheetViewController()
+    loader.loadRuntimeSticker(.init(id: id, uri: asset.uri)) { [weak self, loader] url, image in
+      _ = loader // Keep the loader alive until its download finishes.
+      guard let self else { return }
+      self.view.isUserInteractionEnabled = true
+      guard let url, let image else {
+        self.completion?(.failure(code: "E_SOURCE_UNREADABLE", message: "The initial sticker could not be loaded."))
+        return
+      }
+      self.view.layoutIfNeeded()
+      self.handlePickedImage(url, image: image, purpose: self.mediaType == "photo" ? .photoSticker : .videoSticker)
     }
   }
 

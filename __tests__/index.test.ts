@@ -110,3 +110,40 @@ test('forwards cancellation and cleans up listeners', async () => {
   subscription.remove();
   expect(mockProgressRemove).toHaveBeenCalledTimes(1);
 });
+
+test.each(['photo', 'video'] as const)(
+  'forwards an initial sticker for %s',
+  async (type) => {
+    mockNativeOpenEditor.mockResolvedValue(JSON.stringify({ cancelled: true }));
+    await openEditor({
+      source: { uri: 'file:///media', type },
+      initialStickerId: 'brand',
+      stickerAssets: [{ id: 'brand', uri: 'https://example.com/brand.png' }],
+    });
+    expect(JSON.parse(mockNativeOpenEditor.mock.calls[0]![0])).toMatchObject({
+      initialStickerId: 'brand',
+      stickerAssets: [{ id: 'brand', uri: 'https://example.com/brand.png' }],
+    });
+  }
+);
+
+test.each([
+  { initialStickerId: '' },
+  { initialStickerId: 'missing' },
+  { initialStickerId: 'brand', stickerAssets: [{ id: 'brand', uri: '' }] },
+  {
+    initialStickerId: 'brand',
+    stickerAssets: [
+      { id: 'brand', uri: '/a.png' },
+      { id: 'brand', uri: '/b.png' },
+    ],
+  },
+])(
+  'rejects an invalid initial sticker before opening native UI',
+  async (options) => {
+    await expect(
+      openEditor({ source: { uri: '/photo.jpg', type: 'photo' }, ...options })
+    ).rejects.toMatchObject({ code: 'E_INVALID_OPTIONS' });
+    expect(mockNativeOpenEditor).not.toHaveBeenCalled();
+  }
+);

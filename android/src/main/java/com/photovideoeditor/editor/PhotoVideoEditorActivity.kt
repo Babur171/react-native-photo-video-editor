@@ -185,6 +185,51 @@ class PhotoVideoEditorActivity : Activity() {
     }
     applyStatusBarStyle()
     setContentView(createEditorView())
+    if (!isFinishing) insertInitialSticker()
+  }
+
+  private fun insertInitialSticker() {
+    val id = request.optString("initialStickerId").takeIf { it.isNotBlank() } ?: return
+    val asset = runtimeStickerAssets().firstOrNull { it.id == id } ?: return
+    window.setFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE, android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+    Thread {
+      val path = try {
+        val localPath = if (asset.uri.startsWith("https://", ignoreCase = true)) {
+          val output = File.createTempFile("pve_initial_sticker_", ".img", cacheDir)
+          val connection = java.net.URL(asset.uri).openConnection().apply {
+            connectTimeout = 10_000
+            readTimeout = 15_000
+          }
+          connection.getInputStream().use { input -> output.outputStream().use { input.copyTo(it) } }
+          output.absolutePath
+        } else SourceResolver.resolvePath(this, asset.uri, "pve_initial_sticker")
+        localPath?.takeIf {
+          val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+          BitmapFactory.decodeFile(it, options)
+          options.outWidth > 0 && options.outHeight > 0
+        }
+      } catch (_: Exception) { null }
+      runOnUiThread {
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+        if (isFinishing || isDestroyed) return@runOnUiThread
+        if (path == null) {
+          finishWithError("The initial sticker could not be loaded.", "E_SOURCE_UNREADABLE")
+          return@runOnUiThread
+        }
+        window.decorView.post {
+          if (isFinishing || isDestroyed) return@post
+          val layer = newSticker(stickerId = id, stickerUri = Uri.fromFile(File(path)).toString())
+          if (mediaType == "photo") {
+            photoSession?.layerStack?.commit { it + layer }
+            selectLayer(layer.id)
+          } else videoSession?.let { session ->
+            session.layerStack.commit { it + layer }
+            onVideoLayerStackChanged()
+            selectVideoLayer(layer.id, session)
+          }
+        }
+      }
+    }.start()
   }
 
   private fun applyStatusBarStyle() {

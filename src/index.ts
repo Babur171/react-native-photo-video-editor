@@ -72,6 +72,26 @@ function normalizeOptions(input: EditorOptions): EditorOptions {
     invalid('videoFormat is only valid for video sources.');
   if (input.source.type === 'video' && output.imageFormat !== undefined)
     invalid('imageFormat is only valid for photo sources.');
+  if (input.initialStickerId !== undefined) {
+    if (
+      typeof input.initialStickerId !== 'string' ||
+      !input.initialStickerId.trim()
+    )
+      invalid('initialStickerId must be a non-empty string.');
+    const matches = Array.isArray(input.stickerAssets)
+      ? input.stickerAssets.filter(
+          (asset) => asset?.id === input.initialStickerId
+        )
+      : [];
+    if (
+      matches.length !== 1 ||
+      typeof matches[0]?.uri !== 'string' ||
+      !matches[0].uri.trim()
+    )
+      invalid(
+        'initialStickerId must match exactly one stickerAssets entry with a non-empty uri.'
+      );
+  }
   const features = { ...defaultFeatures, ...input.features };
   if (input.source.type === 'photo') {
     features.trim = false;

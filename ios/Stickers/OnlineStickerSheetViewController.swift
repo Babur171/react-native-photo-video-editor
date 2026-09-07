@@ -236,7 +236,7 @@ final class OnlineStickerSheetViewController: UIViewController {
     }
   }
 
-  private func loadRuntimeSticker(_ sticker: RuntimeSticker, completion: @escaping (URL?, UIImage?) -> Void) {
+  func loadRuntimeSticker(_ sticker: RuntimeSticker, completion: @escaping (URL?, UIImage?) -> Void) {
     if !sticker.uri.lowercased().hasPrefix("https://") {
       guard let path = SourceResolver.resolvePath(sourceUri: sticker.uri, tempPrefix: "pve_runtime_sticker") else {
         completion(nil, nil)

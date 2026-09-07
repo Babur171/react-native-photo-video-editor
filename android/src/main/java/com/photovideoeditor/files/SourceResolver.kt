@@ -15,6 +15,13 @@ object SourceResolver {
     val uri = Uri.parse(sourceUri)
     return when (uri.scheme) {
       "file", null -> uri.path ?: sourceUri
+      "data" -> {
+        if (!sourceUri.startsWith("data:image/png;base64,")) return null
+        val bytes = try {
+          android.util.Base64.decode(sourceUri.substringAfter(','), android.util.Base64.DEFAULT)
+        } catch (_: IllegalArgumentException) { return null }
+        File.createTempFile(tempPrefix, ".png", context.cacheDir).apply { writeBytes(bytes) }.absolutePath
+      }
       "content" -> {
         val tempFile = File.createTempFile(tempPrefix, ".tmp", context.cacheDir)
         val copied = context.contentResolver.openInputStream(uri)?.use { input ->

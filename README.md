@@ -55,3 +55,20 @@ try {
 See [API](docs/api.md), [architecture](docs/architecture.md), [photo editor](docs/photo-editor.md), [video editor](docs/video-editor.md), and [roadmap](docs/roadmap.md). Known limitations are non-functional tool placeholders, no transformed export, local-URI-only input, and no verified legacy-architecture support.
 
 For local work, run `yarn`, then `yarn typecheck`, `yarn lint`, `yarn test`, and `yarn prepare`. See [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed; see [LICENSE](LICENSE).
+
+To place a sticker at the center automatically when opening either editor, pass
+`initialStickerId` matching exactly one entry in `stickerAssets`:
+
+```ts
+await openPhotoEditor({
+  source: { uri: photoUri, type: 'photo' },
+  stickerAssets: [{ id: 'brand', uri: 'https://example.com/brand-sticker.png' }],
+  initialStickerId: 'brand',
+});
+```
+
+The sticker starts at the center of the media and can be moved, resized, or
+removed. The same option works with `openVideoEditor` and `openEditor`, even if
+`features.stickers` hides the sticker picker. Omit it to start without a sticker.
+An unknown or duplicate ID rejects with `E_INVALID_OPTIONS`; an unreadable image
+rejects with `E_SOURCE_UNREADABLE`. HTTPS and local sticker URIs are supported.
