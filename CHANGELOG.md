@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.2.2
+
+- Add `initialStickerId` to place a matching `stickerAssets` image at the center when opening the photo or video editor on Android and iOS.
+- Validate initial sticker IDs before opening the editor and report unreadable initial images.
+- Support base64 PNG data URIs for locally embedded sticker images.
+- Keep initial stickers optional: the editor opens without a sticker unless one is supplied.
+
 ## 0.2.1
 
 - Fix an iOS build failure in `TextEditorSheet`: its private stored property `editing` collided with `UIViewController.isEditing`, which is exported to Objective-C as `editing`, so the compiler treated it as an invalid override ("cannot override with a stored property" / "overriding property must be as accessible as its enclosing type"). The property is now `isEditingExisting`; the `editing:` initialiser label is unchanged, so call sites are unaffected.
