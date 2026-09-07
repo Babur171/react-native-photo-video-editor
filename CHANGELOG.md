@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.3.2
+
+- **Fix iOS video export crash**: Resolved `EXC_BREAKPOINT` / `_xpc_api_misuse` crash on iOS 26+ in `basicvideocompositor.output` by replacing `AVVideoCompositionCoreAnimationTool` with `AVVideoComposition(asset:applyingCIFiltersWithHandler:)` and Core Image compositing in `VideoExporter`.
+- **Fix exported video overlay orientation on iOS**: Removed coordinate inversion that was causing stickers and text overlays to export upside down. Overlays now match preview orientation.
+- **Video editor UI alignment with Android**:
+  - Simplified iOS video editor dock to only Text and Stickers tools, matching Android Kotlin.
+  - Removed video trim timeline bar from the main editing screen.
+  - Fixed layer property slider height, layout constraints, and toolbar spacing to prevent squashing and clipping across all device sizes.
+- **Photo editor bottom toolbar enhancements**:
+  - Increased icon size (20pt SF Symbol in 36x36 tile) and font size (12.5pt medium) across the main bottom tool list.
+  - Increased button spacing and item width in the horizontal tool rail for improved legibility and touch ergonomics.
+- **Crop panel adjustments**:
+  - Reduced font sizes of "Crop" header title (14pt semibold) and "Reset" button (12.5pt medium).
+  - Fixed text wrapping on the "Reset" button (previously breaking into `Re-` / `set`).
+  - Added insets and adjusted width on aspect ratio chips so "Original" stays on a single line.
+- **Configurable completion button text**:
+  - Added `doneButtonText` (and alias `exportButtonText`) prop to `EditorOptions` and `EditorTheme`.
+  - Consumers can now pass custom strings (e.g. `'Done'`, `'Export'`, `'Save'`, `'Next'`) to customize the top-right header button on both iOS and Android (defaults to `'Done'`).
+- **Standardized editor header title**:
+  - Standardized the default header title to `"Editor"` with 16pt font size on both iOS and Android.
+
 ## 0.3.1
 
 - Reduce Android large-video memory pressure with a heap-aware preview sample-buffer target (up to 16 MiB), size-first buffering, and release of preview samples/decoders during export. Restore the paused preview after export cancellation or failure.

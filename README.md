@@ -40,6 +40,7 @@ try {
       { id: 'device-sticker', uri: 'file:///path/to/sticker.png' },
     ],
     export: { quality: 'high', imageFormat: 'png' },
+    doneButtonText: 'Done',
     saveToGallery: false,
   });
   console.log(result.uri, result.cancelled);

@@ -6,6 +6,7 @@ Pass `features` to control which tool entries appear. Photo-only normalization h
 
 - `backgroundColor`, `toolbarColor`, `textColor`, `primaryColor` accept `#RRGGBB`/`#AARRGGBB` hex strings. Android parses them with `Color.parseColor`; iOS parses them itself. An unset or malformed value falls back to the original dark shell colors, so partial themes are safe.
 - `statusBarStyle` (`'light' | 'dark'`) sets the status bar content color (Android `SYSTEM_UI_FLAG_LIGHT_STATUS_BAR`, iOS `preferredStatusBarStyle`).
+- `doneButtonText` (or `exportButtonText`): custom label string for the top-right completion button (defaults to `'Done'`). Can be set on `theme` or directly on top-level `EditorOptions`.
 
 Toolbar ordering/grouping beyond the fixed tool list is not yet implemented. The crop aspect-ratio preset list (Free, 1:1, 4:5, 3:4, 9:16, 16:9) and the filter/adjustment list are currently fixed natively and not yet configurable from the TypeScript API — a documented gap for a later milestone.
 
