@@ -61,11 +61,18 @@ final class CropPanel: UIStackView {
       control.addAction(UIAction { _ in onRatio(name,name == "Original" ? originalRatio() : ratio) },for:.touchUpInside)
       control.applyPressScale(); rail.addArrangedSubview(control); presets[name] = control
     }
-    let scroll = UIScrollView(); scroll.showsHorizontalScrollIndicator = false; scroll.addSubview(rail)
+    let scroll = UIScrollView()
+    scroll.showsHorizontalScrollIndicator = false
+    scroll.alwaysBounceHorizontal = true
+    scroll.delaysContentTouches = true
+    scroll.canCancelContentTouches = true
+    scroll.addSubview(rail)
     rail.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
-      rail.leadingAnchor.constraint(equalTo:scroll.contentLayoutGuide.leadingAnchor), rail.trailingAnchor.constraint(equalTo:scroll.contentLayoutGuide.trailingAnchor),
-      rail.topAnchor.constraint(equalTo:scroll.contentLayoutGuide.topAnchor),rail.bottomAnchor.constraint(equalTo:scroll.contentLayoutGuide.bottomAnchor),
+      rail.leadingAnchor.constraint(equalTo:scroll.contentLayoutGuide.leadingAnchor),
+      scroll.contentLayoutGuide.trailingAnchor.constraint(equalTo:rail.trailingAnchor),
+      rail.topAnchor.constraint(equalTo:scroll.contentLayoutGuide.topAnchor),
+      scroll.contentLayoutGuide.bottomAnchor.constraint(equalTo:rail.bottomAnchor),
       rail.heightAnchor.constraint(equalTo:scroll.frameLayoutGuide.heightAnchor), scroll.heightAnchor.constraint(equalToConstant:72)
     ])
     addArrangedSubview(scroll)

@@ -17,10 +17,11 @@ final class ClosureTapGestureRecognizer: UITapGestureRecognizer {
 }
 
 /// Tactile press feedback (scale 1.0 -> 0.97) matching DESIGN.md's "Tactile Instrument Feel".
-/// Only observes touch-down/up via a zero-duration long-press recognizer with
-/// `cancelsTouchesInView = false`, so it never interferes with an existing tap recognizer
-/// (e.g. the tool rail's `handleToolNodeTap`) already attached to the same view.
-private final class EditorPressFeedback: NSObject {
+/// Tactile press feedback (scale 1.0 -> 0.97) matching DESIGN.md's "Tactile Instrument Feel".
+/// For UIControl instances (like UIButton), hooks natively into touch tracking without gesture recognizers.
+/// For generic UIViews, uses a non-exclusive long-press recognizer that allows simultaneous recognition
+/// with all tap and scroll gestures.
+private final class EditorPressFeedback: NSObject, UIGestureRecognizerDelegate {
   private let pressedScale: CGFloat
   private weak var target: UIView?
 
@@ -28,19 +29,61 @@ private final class EditorPressFeedback: NSObject {
     self.target = target
     self.pressedScale = pressedScale
     super.init()
-    let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(handle(_:)))
-    recognizer.minimumPressDuration = 0
-    recognizer.cancelsTouchesInView = false
-    target.addGestureRecognizer(recognizer)
+    if let control = target as? UIControl {
+      control.addAction(UIAction { [weak target] _ in
+        UIView.animate(
+          withDuration: 0.08,
+          delay: 0,
+          options: [.allowUserInteraction, .beginFromCurrentState],
+          animations: { target?.transform = CGAffineTransform(scaleX: pressedScale, y: pressedScale) }
+        )
+      }, for: [.touchDown, .touchDragEnter])
+      control.addAction(UIAction { [weak target] _ in
+        UIView.animate(
+          withDuration: 0.12,
+          delay: 0,
+          options: [.allowUserInteraction, .beginFromCurrentState],
+          animations: { target?.transform = .identity }
+        )
+      }, for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
+    } else {
+      let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(handle(_:)))
+      recognizer.minimumPressDuration = 0
+      recognizer.cancelsTouchesInView = false
+      recognizer.delegate = self
+      target.addGestureRecognizer(recognizer)
+    }
+  }
+
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+    return true
+  }
+
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+    return false
+  }
+
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+    return false
   }
 
   @objc private func handle(_ recognizer: UILongPressGestureRecognizer) {
     guard let target else { return }
     switch recognizer.state {
     case .began:
-      UIView.animate(withDuration: 0.08) { target.transform = CGAffineTransform(scaleX: self.pressedScale, y: self.pressedScale) }
+      UIView.animate(
+        withDuration: 0.08,
+        delay: 0,
+        options: [.allowUserInteraction, .beginFromCurrentState],
+        animations: { target.transform = CGAffineTransform(scaleX: self.pressedScale, y: self.pressedScale) }
+      )
     case .ended, .cancelled, .failed:
-      UIView.animate(withDuration: 0.12) { target.transform = .identity }
+      UIView.animate(
+        withDuration: 0.12,
+        delay: 0,
+        options: [.allowUserInteraction, .beginFromCurrentState],
+        animations: { target.transform = .identity }
+      )
     default:
       break
     }

@@ -33,35 +33,33 @@ enum PhotoAdjustmentRenderer {
   }
 
   private static func applyColorAdjustments(_ buffer: inout PixelBuffer, _ adjustments: PhotoAdjustments) {
-    let exposureScale = pow(2, adjustments.exposure / 100)
-    let brightnessOffset = adjustments.brightness / 100 * 80
-    let contrastScale = (adjustments.contrast + 100) / 100
-    let contrastTranslate = 128 * (1 - contrastScale)
-    let saturationFactor = (adjustments.saturation + 100) / 100
-    let tempShift = adjustments.temperature / 100 * 40
+    let exposureScale = Float(pow(2.0, adjustments.exposure / 100))
+    let brightnessOffset = Float(adjustments.brightness / 100 * 80)
+    let contrastScale = Float((adjustments.contrast + 100) / 100)
+    let contrastTranslate = Float(128 * (1 - contrastScale))
+    let saturationFactor = Float((adjustments.saturation + 100) / 100)
+    let tempShift = Float(adjustments.temperature / 100 * 40)
+
+    let combScale = exposureScale * contrastScale
+    let combOffset = brightnessOffset * contrastScale + contrastTranslate
 
     buffer.mutateBytes { ptr, _, width, height in
       let totalPixels = width * height
       for i in 0..<totalPixels {
         let offset = i * 4
-        let rVal = Double(ptr[offset])
-        let gVal = Double(ptr[offset + 1])
-        let bVal = Double(ptr[offset + 2])
-        var r = rVal * exposureScale + brightnessOffset
-        var g = gVal * exposureScale + brightnessOffset
-        var b = bVal * exposureScale + brightnessOffset
-        r = r * contrastScale + contrastTranslate
-        g = g * contrastScale + contrastTranslate
-        b = b * contrastScale + contrastTranslate
-        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        r = luminance + (r - luminance) * saturationFactor
-        g = luminance + (g - luminance) * saturationFactor
-        b = luminance + (b - luminance) * saturationFactor
-        r += tempShift
-        b -= tempShift
-        ptr[offset] = clampByte(r)
-        ptr[offset + 1] = clampByte(g)
-        ptr[offset + 2] = clampByte(b)
+        let rVal = Float(ptr[offset])
+        let gVal = Float(ptr[offset + 1])
+        let bVal = Float(ptr[offset + 2])
+        let rBase = rVal * combScale + combOffset
+        let gBase = gVal * combScale + combOffset
+        let bBase = bVal * combScale + combOffset
+        let luminance = 0.2126 * rBase + 0.7152 * gBase + 0.0722 * bBase
+        let r = luminance + (rBase - luminance) * saturationFactor + tempShift
+        let g = luminance + (gBase - luminance) * saturationFactor
+        let b = luminance + (bBase - luminance) * saturationFactor - tempShift
+        ptr[offset] = UInt8(min(max(r, 0), 255))
+        ptr[offset + 1] = UInt8(min(max(g, 0), 255))
+        ptr[offset + 2] = UInt8(min(max(b, 0), 255))
       }
     }
   }
@@ -103,23 +101,25 @@ enum PhotoAdjustmentRenderer {
 
   private static func applyPreset(_ image: UIImage, preset: String, strength: Double) -> UIImage {
     guard let recipe = PhotoFilterPresets.recipe(for: preset), var buffer = PixelBuffer(image: image) else { return image }
+    let sat = Float(recipe.saturation)
+    let scale = Float(recipe.scale)
+    let rOff = Float(recipe.redOffset)
+    let gOff = Float(recipe.greenOffset)
+    let bOff = Float(recipe.blueOffset)
     buffer.mutateBytes { ptr, _, width, height in
       let totalPixels = width * height
       for i in 0..<totalPixels {
         let offset = i * 4
-        let rVal = Double(ptr[offset])
-        let gVal = Double(ptr[offset + 1])
-        let bVal = Double(ptr[offset + 2])
+        let rVal = Float(ptr[offset])
+        let gVal = Float(ptr[offset + 1])
+        let bVal = Float(ptr[offset + 2])
         let luminance = 0.2126 * rVal + 0.7152 * gVal + 0.0722 * bVal
-        var r = luminance + (rVal - luminance) * recipe.saturation
-        var g = luminance + (gVal - luminance) * recipe.saturation
-        var b = luminance + (bVal - luminance) * recipe.saturation
-        r = r * recipe.scale + recipe.redOffset
-        g = g * recipe.scale + recipe.greenOffset
-        b = b * recipe.scale + recipe.blueOffset
-        ptr[offset] = clampByte(r)
-        ptr[offset + 1] = clampByte(g)
-        ptr[offset + 2] = clampByte(b)
+        let r = (luminance + (rVal - luminance) * sat) * scale + rOff
+        let g = (luminance + (gVal - luminance) * sat) * scale + gOff
+        let b = (luminance + (bVal - luminance) * sat) * scale + bOff
+        ptr[offset] = UInt8(min(max(r, 0), 255))
+        ptr[offset + 1] = UInt8(min(max(g, 0), 255))
+        ptr[offset + 2] = UInt8(min(max(b, 0), 255))
       }
     }
     guard let filtered = buffer.makeImage() else { return image }
@@ -130,10 +130,6 @@ enum PhotoAdjustmentRenderer {
       image.draw(in: CGRect(origin: .zero, size: image.size))
       filtered.draw(in: CGRect(origin: .zero, size: image.size), blendMode: .normal, alpha: CGFloat(strength))
     }
-  }
-
-  private static func clampByte(_ value: Double) -> UInt8 {
-    UInt8(min(max(value.rounded(), 0), 255))
   }
 }
 
