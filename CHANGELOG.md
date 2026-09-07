@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.3.1
+
+- Reduce Android large-video memory pressure with a heap-aware preview sample-buffer target (up to 16 MiB), size-first buffering, and release of preview samples/decoders during export. Restore the paused preview after export cancellation or failure.
+
+## 0.3.0
+
+- Breaking API change: migrate `initialStickerId: 'brand'` to `initialStickerIds: ['brand']`.
+- Replace `initialStickerId` with `initialStickerIds` and add a top-right control on the selected default sticker to cycle through default stickers on Android and iOS. Swaps preserve transforms and support undo/redo; the button is enabled only for multiple IDs.
+- Place the swap control on the sticker’s top-right corner, above the scale control, so it follows dragging and rotation.
+- Remove dummy sticker data from the example; default stickers are supplied by the caller.
+
 ## 0.2.2
 
 - Add `initialStickerId` to place a matching `stickerAssets` image at the center when opening the photo or video editor on Android and iOS.

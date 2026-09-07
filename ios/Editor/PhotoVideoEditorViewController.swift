@@ -15,7 +15,10 @@ final class PhotoVideoEditorViewController: UIViewController {
   private let features: [String: Any]
   private let theme: [String: Any]
   private let exportOptions: [String: Any]
-  private let initialStickerId: String?
+  private let initialStickerIds: [String]
+  private let initialStickerLayerID = UUID().uuidString
+  private var initialStickerImages: [String: (URL, UIImage)] = [:]
+  private var initialStickerLoading = false
   private let stickerAssets: [[String: Any]]
   var completion: ((PhotoVideoEditorOutcome) -> Void)?
 
@@ -119,7 +122,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     theme: [String: Any] = [:],
     exportOptions: [String: Any] = [:],
     stickerAssets: [[String: Any]] = [],
-    initialStickerId: String? = nil
+    initialStickerIds: [String] = []
   ) {
     self.uri = uri
     self.mediaType = mediaType
@@ -127,7 +130,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     self.theme = theme
     self.exportOptions = exportOptions
     self.stickerAssets = stickerAssets
-    self.initialStickerId = initialStickerId
+    self.initialStickerIds = initialStickerIds
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .fullScreen
   }
@@ -160,21 +163,68 @@ final class PhotoVideoEditorViewController: UIViewController {
     insertInitialSticker()
   }
 
-  private func insertInitialSticker() {
-    guard let id = initialStickerId,
-          let asset = consumerStickerAssets().first(where: { $0.id == id }) else { return }
+  private func currentInitialSticker() -> PhotoLayer? {
+    (photoSession?.layerStack.layers ?? videoSession?.layerStack.layers ?? []).first { $0.id == initialStickerLayerID }
+  }
+
+  private func switchInitialSticker() {
+    guard !initialStickerLoading, initialStickerIds.count > 1 else { return }
+    let currentID = currentInitialSticker()?.stickerId
+    let currentIndex = currentID.flatMap { initialStickerIds.firstIndex(of: $0) } ?? -1
+    insertInitialSticker(index: (currentIndex + 1) % initialStickerIds.count)
+  }
+
+  private func insertInitialSticker(index: Int = 0) {
+    guard !initialStickerLoading, initialStickerIds.indices.contains(index) else { return }
+    let id = initialStickerIds[index]
+    guard let asset = consumerStickerAssets().first(where: { $0.id == id }) else { return }
+    initialStickerLoading = true
     view.isUserInteractionEnabled = false
-    let loader = OnlineStickerSheetViewController()
-    loader.loadRuntimeSticker(.init(id: id, uri: asset.uri)) { [weak self, loader] url, image in
-      _ = loader // Keep the loader alive until its download finishes.
+    let apply: (URL?, UIImage?) -> Void = { [weak self] url, image in
       guard let self else { return }
+      self.initialStickerLoading = false
       self.view.isUserInteractionEnabled = true
       guard let url, let image else {
-        self.completion?(.failure(code: "E_SOURCE_UNREADABLE", message: "The initial sticker could not be loaded."))
+        if self.initialStickerImages.isEmpty {
+          self.completion?(.failure(code: "E_SOURCE_UNREADABLE", message: "The initial sticker could not be loaded."))
+        } else {
+          let alert = UIAlertController(title: "Couldn't load sticker", message: "Please try again.", preferredStyle: .alert)
+          alert.addAction(UIAlertAction(title: "OK", style: .default))
+          self.present(alert, animated: true)
+        }
         return
       }
+      self.initialStickerImages[id] = (url, image)
       self.view.layoutIfNeeded()
-      self.handlePickedImage(url, image: image, purpose: self.mediaType == "photo" ? .photoSticker : .videoSticker)
+      var layer = self.currentInitialSticker() ?? self.newSticker()
+      layer.id = self.initialStickerLayerID
+      layer.stickerId = id
+      layer.stickerUri = url.absoluteString
+      layer.overlayAspectRatio = max(image.size.width, 1) / max(image.size.height, 1)
+      let replace: ([PhotoLayer]) -> [PhotoLayer] = { layers in
+        if layers.contains(where: { $0.id == self.initialStickerLayerID }) {
+          return layers.map { $0.id == self.initialStickerLayerID ? layer : $0 }
+        }
+        return layers + [layer]
+      }
+      if let session = self.photoSession {
+        session.layerStack.commit(replace)
+        self.onLayerStackChanged()
+        self.selectLayer(layer.id)
+      } else if let session = self.videoSession {
+        session.layerStack.commit(replace)
+        self.onVideoLayerStackChanged()
+        self.selectVideoLayer(layer.id, session: session)
+      }
+    }
+    if let cached = initialStickerImages[id] {
+      apply(cached.0, cached.1)
+    } else {
+      let loader = OnlineStickerSheetViewController()
+      loader.loadRuntimeSticker(.init(id: id, uri: asset.uri)) { [loader] url, image in
+        _ = loader // Keep the loader alive until its download finishes.
+        apply(url, image)
+      }
     }
   }
 
@@ -233,7 +283,10 @@ final class PhotoVideoEditorViewController: UIViewController {
       overlay.bottomAnchor.constraint(equalTo: preview.bottomAnchor),
     ])
 
-    let layers = LayerOverlayView()
+    let layers = LayerOverlayView(frame: .zero)
+    layers.swappableLayerID = initialStickerLayerID
+    layers.stickerSwapEnabled = initialStickerIds.count > 1
+    layers.onStickerSwap = { [weak self] in self?.switchInitialSticker() }
     layerOverlay = layers
     preview.addSubview(layers)
     layers.translatesAutoresizingMaskIntoConstraints = false
@@ -1568,7 +1621,10 @@ final class PhotoVideoEditorViewController: UIViewController {
       let scale = bounds.width/max(fitted.width,0.001)
       playerView.transform = CGAffineTransform(translationX:bounds.midX-fitted.midX,y:bounds.midY-fitted.midY).scaledBy(x:scale,y:scale)
     }
-    let videoLayers = LayerOverlayView()
+    let videoLayers = LayerOverlayView(frame: .zero)
+    videoLayers.swappableLayerID = initialStickerLayerID
+    videoLayers.stickerSwapEnabled = initialStickerIds.count > 1
+    videoLayers.onStickerSwap = { [weak self] in self?.switchInitialSticker() }
     videoLayerOverlay = videoLayers
     preview.addSubview(videoLayers)
     videoLayers.translatesAutoresizingMaskIntoConstraints = false

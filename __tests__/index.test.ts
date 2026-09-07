@@ -117,22 +117,26 @@ test.each(['photo', 'video'] as const)(
     mockNativeOpenEditor.mockResolvedValue(JSON.stringify({ cancelled: true }));
     await openEditor({
       source: { uri: 'file:///media', type },
-      initialStickerId: 'brand',
+      initialStickerIds: ['brand'],
       stickerAssets: [{ id: 'brand', uri: 'https://example.com/brand.png' }],
     });
     expect(JSON.parse(mockNativeOpenEditor.mock.calls[0]![0])).toMatchObject({
-      initialStickerId: 'brand',
+      initialStickerIds: ['brand'],
       stickerAssets: [{ id: 'brand', uri: 'https://example.com/brand.png' }],
     });
   }
 );
 
 test.each([
-  { initialStickerId: '' },
-  { initialStickerId: 'missing' },
-  { initialStickerId: 'brand', stickerAssets: [{ id: 'brand', uri: '' }] },
   {
-    initialStickerId: 'brand',
+    initialStickerIds: ['brand', 'brand'],
+    stickerAssets: [{ id: 'brand', uri: '/a.png' }],
+  },
+  { initialStickerIds: [''] },
+  { initialStickerIds: ['missing'] },
+  { initialStickerIds: ['brand'], stickerAssets: [{ id: 'brand', uri: '' }] },
+  {
+    initialStickerIds: ['brand'],
     stickerAssets: [
       { id: 'brand', uri: '/a.png' },
       { id: 'brand', uri: '/b.png' },
@@ -147,3 +151,38 @@ test.each([
     expect(mockNativeOpenEditor).not.toHaveBeenCalled();
   }
 );
+
+test.each([{ ids: [] }, { ids: ['a'] }, { ids: ['a', 'b'] }])(
+  'accepts ordered initialStickerIds %j',
+  async ({ ids }) => {
+    mockNativeOpenEditor.mockResolvedValue(JSON.stringify({ cancelled: true }));
+    await openEditor({
+      source: { uri: '/photo.jpg', type: 'photo' },
+      initialStickerIds: ids,
+      stickerAssets: [
+        { id: 'a', uri: '/a.png' },
+        { id: 'b', uri: '/b.png' },
+      ],
+    });
+    expect(
+      JSON.parse(mockNativeOpenEditor.mock.calls[0]![0]).initialStickerIds
+    ).toEqual(ids);
+  }
+);
+
+test.each([
+  { ids: 'brand' },
+  { ids: null },
+  { ids: [1] },
+  { ids: ['a', 'missing'] },
+])('rejects malformed initialStickerIds %j', async ({ ids }) => {
+  await expect(
+    openEditor({
+      source: { uri: '/photo.jpg', type: 'photo' },
+      // @ts-expect-error Deliberately test untyped caller input.
+      initialStickerIds: ids,
+      stickerAssets: [{ id: 'a', uri: '/a.png' }],
+    })
+  ).rejects.toMatchObject({ code: 'E_INVALID_OPTIONS' });
+  expect(mockNativeOpenEditor).not.toHaveBeenCalled();
+});

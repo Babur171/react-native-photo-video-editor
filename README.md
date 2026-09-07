@@ -57,18 +57,28 @@ See [API](docs/api.md), [architecture](docs/architecture.md), [photo editor](doc
 For local work, run `yarn`, then `yarn typecheck`, `yarn lint`, `yarn test`, and `yarn prepare`. See [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed; see [LICENSE](LICENSE).
 
 To place a sticker at the center automatically when opening either editor, pass
-`initialStickerId` matching exactly one entry in `stickerAssets`:
+`initialStickerIds` containing unique IDs from `stickerAssets`:
 
 ```ts
 await openPhotoEditor({
   source: { uri: photoUri, type: 'photo' },
-  stickerAssets: [{ id: 'brand', uri: 'https://example.com/brand-sticker.png' }],
-  initialStickerId: 'brand',
+  stickerAssets: [
+    { id: 'brand', uri: 'https://example.com/brand-sticker.png' },
+    { id: 'alternate', uri: 'https://example.com/alternate.png' },
+  ],
+  initialStickerIds: ['brand', 'alternate'],
 });
 ```
 
-The sticker starts at the center of the media and can be moved, resized, or
-removed. The same option works with `openVideoEditor` and `openEditor`, even if
+The first sticker starts at the center of the media and can be moved, resized, or
+removed. The “Switch default sticker” control at the selected default sticker’s top-right
+corner, above its bottom-right scale control, cycles through the IDs in
+order and wraps around, replacing the current default sticker while preserving
+its transforms. Switching is undoable. After deletion, use Undo to restore the sticker and its
+controls. The swap control is disabled for one ID and appears only on the selected
+default sticker. Failed swaps leave the existing sticker in place. The same option works with `openVideoEditor` and `openEditor`, even if
 `features.stickers` hides the sticker picker. Omit it to start without a sticker.
 An unknown or duplicate ID rejects with `E_INVALID_OPTIONS`; an unreadable image
 rejects with `E_SOURCE_UNREADABLE`. HTTPS and local sticker URIs are supported.
+
+Migration: replace `initialStickerId: 'brand'` with `initialStickerIds: ['brand']`.

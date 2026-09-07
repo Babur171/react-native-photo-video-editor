@@ -188,13 +188,32 @@ class PhotoVideoEditorActivity : Activity() {
     if (!isFinishing) insertInitialSticker()
   }
 
-  private fun insertInitialSticker() {
-    val id = request.optString("initialStickerId").takeIf { it.isNotBlank() } ?: return
+  private val initialStickerIds: List<String> by lazy {
+    val ids = request.optJSONArray("initialStickerIds")
+    if (ids == null) emptyList() else (0 until ids.length()).map { ids.optString(it) }.filter { it.isNotBlank() }.distinct()
+  }
+  private val initialStickerLayerId = java.util.UUID.randomUUID().toString()
+  private val initialStickerPaths = mutableMapOf<String, String>()
+  private var initialStickerLoading = false
+
+  private fun currentInitialSticker(): PhotoLayer? =
+    (photoSession?.layerStack?.layers ?: videoSession?.layerStack?.layers)?.firstOrNull { it.id == initialStickerLayerId }
+
+  private fun switchInitialSticker() {
+    if (initialStickerLoading || initialStickerIds.size < 2) return
+    val currentIndex = initialStickerIds.indexOf(currentInitialSticker()?.stickerId)
+    insertInitialSticker((currentIndex + 1) % initialStickerIds.size)
+  }
+
+  private fun insertInitialSticker(index: Int = 0) {
+    if (initialStickerLoading) return
+    val id = initialStickerIds.getOrNull(index) ?: return
     val asset = runtimeStickerAssets().firstOrNull { it.id == id } ?: return
+    initialStickerLoading = true
     window.setFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE, android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
     Thread {
       val path = try {
-        val localPath = if (asset.uri.startsWith("https://", ignoreCase = true)) {
+        val localPath = initialStickerPaths[id] ?: if (asset.uri.startsWith("https://", ignoreCase = true)) {
           val output = File.createTempFile("pve_initial_sticker_", ".img", cacheDir)
           val connection = java.net.URL(asset.uri).openConnection().apply {
             connectTimeout = 10_000
@@ -210,20 +229,31 @@ class PhotoVideoEditorActivity : Activity() {
         }
       } catch (_: Exception) { null }
       runOnUiThread {
+        initialStickerLoading = false
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
         if (isFinishing || isDestroyed) return@runOnUiThread
         if (path == null) {
-          finishWithError("The initial sticker could not be loaded.", "E_SOURCE_UNREADABLE")
+          if (initialStickerPaths.isEmpty()) finishWithError("The initial sticker could not be loaded.", "E_SOURCE_UNREADABLE")
+          else Toast.makeText(this, "Could not load this sticker. Try again.", Toast.LENGTH_SHORT).show()
           return@runOnUiThread
         }
+        initialStickerPaths[id] = path
         window.decorView.post {
           if (isFinishing || isDestroyed) return@post
-          val layer = newSticker(stickerId = id, stickerUri = Uri.fromFile(File(path)).toString())
+          val uri = Uri.fromFile(File(path)).toString()
+          val fresh = newSticker(stickerId = id, stickerUri = uri)
+          val layer = currentInitialSticker()?.copy(stickerId = id, stickerUri = uri, overlayAspectRatio = fresh.overlayAspectRatio)
+            ?: fresh.copy(id = initialStickerLayerId)
+          val replace: (List<PhotoLayer>) -> List<PhotoLayer> = { layers ->
+            if (layers.any { it.id == initialStickerLayerId }) layers.map { if (it.id == initialStickerLayerId) layer else it }
+            else layers + layer
+          }
           if (mediaType == "photo") {
-            photoSession?.layerStack?.commit { it + layer }
+            photoSession?.layerStack?.commit(replace)
+            onLayerStackChanged()
             selectLayer(layer.id)
           } else videoSession?.let { session ->
-            session.layerStack.commit { it + layer }
+            session.layerStack.commit(replace)
             onVideoLayerStackChanged()
             selectVideoLayer(layer.id, session)
           }
@@ -320,6 +350,9 @@ class PhotoVideoEditorActivity : Activity() {
     previewContainer.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
 
     val layers = LayerOverlayView(this)
+    layers.swappableLayerId = initialStickerLayerId
+    layers.stickerSwapEnabled = initialStickerIds.size > 1
+    layers.onStickerSwap = { switchInitialSticker() }
     layerOverlay = layers
     previewContainer.addView(layers, FrameLayout.LayoutParams(MATCH, MATCH))
 
@@ -1501,6 +1534,9 @@ class PhotoVideoEditorActivity : Activity() {
       if (videoCropMode) videoCropOverlay.restore(videoMediaBounds(session, playerView, false), session.state.crop)
     }
     val layerOverlay = LayerOverlayView(this)
+    layerOverlay.swappableLayerId = initialStickerLayerId
+    layerOverlay.stickerSwapEnabled = initialStickerIds.size > 1
+    layerOverlay.onStickerSwap = { switchInitialSticker() }
     videoLayerOverlay = layerOverlay
     preview.addView(layerOverlay, FrameLayout.LayoutParams(MATCH, MATCH))
     layerOverlay.onLayerDelete = { id ->
@@ -2254,7 +2290,7 @@ class PhotoVideoEditorActivity : Activity() {
       finishWithError("Nothing to export.", "E_INTERNAL")
       return
     }
-    session.player.pause()
+    session.stopPreviewForExport()
     videoExportProgressView.visibility = View.VISIBLE
     val exporter = VideoExporter(applicationContext)
     videoExporter = exporter
@@ -2285,11 +2321,13 @@ class PhotoVideoEditorActivity : Activity() {
         runOnUiThread {
           videoExporter = null
           videoExportProgressView.visibility = View.GONE
+          session.restorePreviewAfterExport()
           Toast.makeText(this, error.message ?: "Unable to export the video.", Toast.LENGTH_LONG).show()
         }
       }
       )
     } catch (error: Exception) {
+      session.restorePreviewAfterExport()
       videoExporter = null
       videoExportProgressView.visibility = View.GONE
       Toast.makeText(this, error.message ?: "Unable to export the video.", Toast.LENGTH_LONG).show()
@@ -2298,6 +2336,7 @@ class PhotoVideoEditorActivity : Activity() {
 
   private fun cancelVideoExport() {
     videoExporter?.cancel()
+    videoSession?.restorePreviewAfterExport()
     videoExporter = null
     videoExportProgressView.visibility = View.GONE
   }

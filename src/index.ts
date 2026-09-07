@@ -72,25 +72,29 @@ function normalizeOptions(input: EditorOptions): EditorOptions {
     invalid('videoFormat is only valid for video sources.');
   if (input.source.type === 'video' && output.imageFormat !== undefined)
     invalid('imageFormat is only valid for photo sources.');
-  if (input.initialStickerId !== undefined) {
+  if (input.initialStickerIds !== undefined) {
     if (
-      typeof input.initialStickerId !== 'string' ||
-      !input.initialStickerId.trim()
+      !Array.isArray(input.initialStickerIds) ||
+      input.initialStickerIds.some((id) => typeof id !== 'string' || !id.trim())
     )
-      invalid('initialStickerId must be a non-empty string.');
-    const matches = Array.isArray(input.stickerAssets)
-      ? input.stickerAssets.filter(
-          (asset) => asset?.id === input.initialStickerId
-        )
-      : [];
+      invalid('initialStickerIds must be an array of non-empty strings.');
     if (
-      matches.length !== 1 ||
-      typeof matches[0]?.uri !== 'string' ||
-      !matches[0].uri.trim()
+      new Set(input.initialStickerIds).size !== input.initialStickerIds.length
     )
-      invalid(
-        'initialStickerId must match exactly one stickerAssets entry with a non-empty uri.'
-      );
+      invalid('initialStickerIds must contain unique IDs.');
+    for (const id of input.initialStickerIds) {
+      const matches = Array.isArray(input.stickerAssets)
+        ? input.stickerAssets.filter((asset) => asset?.id === id)
+        : [];
+      if (
+        matches.length !== 1 ||
+        typeof matches[0]?.uri !== 'string' ||
+        !matches[0].uri.trim()
+      )
+        invalid(
+          'Each initialStickerIds entry must match exactly one stickerAssets entry with a non-empty uri.'
+        );
+    }
   }
   const features = { ...defaultFeatures, ...input.features };
   if (input.source.type === 'photo') {

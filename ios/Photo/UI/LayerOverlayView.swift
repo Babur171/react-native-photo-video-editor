@@ -8,6 +8,9 @@ final class LayerOverlayView: UIView {
   var maxScale: CGFloat = 8
   var layers: [PhotoLayer] = [] { didSet { setNeedsDisplay() } }
   var selectedLayerID: String? { didSet { setNeedsDisplay() } }
+  var swappableLayerID: String? { didSet { setNeedsDisplay() } }
+  var stickerSwapEnabled = false { didSet { setNeedsDisplay() } }
+  var onStickerSwap: (() -> Void)?
   var onLayerDelete: ((String) -> Void)?
   var onLayerTapped: ((String?) -> Void)?
   var onLayerDoubleTapped: ((String) -> Void)?
@@ -52,6 +55,9 @@ final class LayerOverlayView: UIView {
     }
     drawControl(context, point: CGPoint(x: -half.width, y: -half.height), symbol: "xmark", tint: .systemRed)
     drawControl(context, point: CGPoint(x: half.width, y: half.height), symbol: "arrow.up.left.and.arrow.down.right", tint: DesignTokens.primary)
+    if layer.type == .sticker && layer.id == swappableLayerID {
+      drawControl(context, point: CGPoint(x: half.width, y: -half.height), symbol: "arrow.left.arrow.right", tint: stickerSwapEnabled && !layer.locked ? DesignTokens.primary : .gray)
+    }
     context.restoreGState()
   }
 
@@ -80,6 +86,14 @@ final class LayerOverlayView: UIView {
     if let selected, !selected.locked {
       let center = center(of: selected); let handle = handlePoint(selected)
       let deletePoint = CGPoint(x: center.x * 2 - handle.x, y: center.y * 2 - handle.y)
+      if selected.type == .sticker && selected.id == swappableLayerID {
+        let swapDistance = distance(swapPoint(selected), point)
+        if swapDistance <= handleTouchRadius && swapDistance <= distance(deletePoint, point) && swapDistance <= distance(handle, point) {
+          resetGesture()
+          if stickerSwapEnabled { onStickerSwap?() }
+          return
+        }
+      }
       if distance(deletePoint, point) <= handleTouchRadius { onLayerDelete?(selected.id); resetGesture(); return }
     }
     let handleHit = selected.flatMap { !$0.locked && isHandleHit($0, point) ? $0 : nil }
@@ -177,6 +191,10 @@ final class LayerOverlayView: UIView {
   private func handlePoint(_ layer: PhotoLayer) -> CGPoint {
     let center = center(of: layer); let half = selectionHalfExtents(layer); let radians = layer.rotationDegrees * .pi / 180
     return CGPoint(x: center.x + half.width * cos(radians) - half.height * sin(radians), y: center.y + half.width * sin(radians) + half.height * cos(radians))
+  }
+  private func swapPoint(_ layer: PhotoLayer) -> CGPoint {
+    let center = center(of: layer); let half = selectionHalfExtents(layer); let radians = layer.rotationDegrees * .pi / 180
+    return CGPoint(x: center.x + half.width * cos(radians) + half.height * sin(radians), y: center.y + half.width * sin(radians) - half.height * cos(radians))
   }
   private func isHandleHit(_ layer: PhotoLayer, _ point: CGPoint) -> Bool { distance(handlePoint(layer), point) <= handleTouchRadius }
   private func hitTest(_ point: CGPoint) -> PhotoLayer? {

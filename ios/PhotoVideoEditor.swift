@@ -31,7 +31,7 @@ public class PhotoVideoEditorSwift: NSObject {
       theme: payload["theme"] as? [String: Any] ?? [:],
       exportOptions: payload["export"] as? [String: Any] ?? [:],
       stickerAssets: payload["stickerAssets"] as? [[String: Any]] ?? [],
-      initialStickerId: payload["initialStickerId"] as? String
+      initialStickerIds: payload["initialStickerIds"] as? [String] ?? []
     )
     controller.completion = { [weak self, weak controller] outcome in
       guard let self else { return }

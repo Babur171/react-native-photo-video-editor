@@ -6,6 +6,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import com.photovideoeditor.photo.render.PhotoLayerStack
 import java.io.File
 
@@ -21,7 +22,17 @@ class VideoEditSession(context: Context, val sourceUri: String) {
     private set
   var sourceHeight = 0
     private set
-  val player: ExoPlayer = ExoPlayer.Builder(context).build()
+  // Bound compressed samples independently of bitrate/duration. Time-first buffering
+  // can otherwise exhaust the host app's heap on high-bitrate camera footage.
+  val player: ExoPlayer = ExoPlayer.Builder(context)
+    .setLoadControl(DefaultLoadControl.Builder()
+      .setTargetBufferBytes(VideoBufferBudget.targetBytes(Runtime.getRuntime().maxMemory()))
+      .setBufferDurationsMs(2_000, 5_000, 500, 1_000)
+      .setPrioritizeTimeOverSizeThresholds(false)
+      .setBackBuffer(0, false)
+      .build())
+    .build()
+  private var previewStoppedForExport = false
 
   /** Text/sticker/shape overlays. Reuses the photo layer model/stack — see `PhotoLayer.startMs`/`endMs` for timing. */
   val layerStack = PhotoLayerStack()
@@ -131,6 +142,21 @@ class VideoEditSession(context: Context, val sourceUri: String) {
       }
       remaining -= clipDuration
     }
+  }
+
+  /** Pause alone retains samples and decoders; stop releases them while retaining the playlist/position. */
+  fun stopPreviewForExport() {
+    if (previewStoppedForExport) return
+    previewStoppedForExport = true
+    player.pause()
+    player.stop()
+  }
+
+  /** Export failure/cancellation returns to the same paused preview. */
+  fun restorePreviewAfterExport() {
+    if (!previewStoppedForExport) return
+    previewStoppedForExport = false
+    player.prepare()
   }
 
   fun release() {

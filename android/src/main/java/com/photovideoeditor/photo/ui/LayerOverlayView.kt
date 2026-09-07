@@ -28,6 +28,11 @@ class LayerOverlayView(context: Context) : View(context) {
     set(value) { field = value; invalidate() }
   var selectedLayerId: String? = null
     set(value) { field = value; invalidate() }
+  var swappableLayerId: String? = null
+    set(value) { field = value; invalidate() }
+  var stickerSwapEnabled = false
+    set(value) { field = value; invalidate() }
+  var onStickerSwap: (() -> Unit)? = null
   var onLayerDelete: ((String) -> Unit)? = null
   var onLayerTapped: ((String?) -> Unit)? = null
   var onLayerDoubleTapped: ((String) -> Unit)? = null
@@ -71,6 +76,10 @@ class LayerOverlayView(context: Context) : View(context) {
     }
     drawControl(canvas, -half.first, -half.second, R.drawable.ic_close, Color.rgb(255, 100, 115))
     drawControl(canvas, half.first, half.second, R.drawable.ic_fullscreen, Color.rgb(167, 139, 250))
+    if (selected.type == LayerType.STICKER && selected.id == swappableLayerId) {
+      drawControl(canvas, half.first, -half.second, R.drawable.ic_swap_sticker,
+        if (stickerSwapEnabled && !selected.locked) Color.rgb(167, 139, 250) else Color.GRAY)
+    }
     canvas.restore()
   }
 
@@ -92,6 +101,17 @@ class LayerOverlayView(context: Context) : View(context) {
         if (selected != null && !selected.locked) {
           val handle = handlePoint(selected)
           val center = centerOf(selected)
+          if (selected.type == LayerType.STICKER && selected.id == swappableLayerId) {
+            val swap = swapPoint(selected)
+            val swapDistance = hypot(event.x - swap.first, event.y - swap.second)
+            val deleteDistance = hypot(event.x - (2 * center.first - handle.first), event.y - (2 * center.second - handle.second))
+            val scaleDistance = hypot(event.x - handle.first, event.y - handle.second)
+            if (swapDistance <= handleTouchRadius && swapDistance <= deleteDistance && swapDistance <= scaleDistance) {
+              resetGesture()
+              if (stickerSwapEnabled) onStickerSwap?.invoke()
+              return true
+            }
+          }
           if (hypot(event.x - (2 * center.first - handle.first), event.y - (2 * center.second - handle.second)) <= handleTouchRadius) {
             onLayerDelete?.invoke(selected.id); resetGesture(); return true
           }
@@ -223,6 +243,12 @@ class LayerOverlayView(context: Context) : View(context) {
     val center = centerOf(layer); val half = selectionHalfExtents(layer)
     val radians = Math.toRadians(layer.rotationDegrees.toDouble())
     return Pair(center.first + (half.first * cos(radians) - half.second * sin(radians)).toFloat(), center.second + (half.first * sin(radians) + half.second * cos(radians)).toFloat())
+  }
+
+  private fun swapPoint(layer: PhotoLayer): Pair<Float, Float> {
+    val center = centerOf(layer); val half = selectionHalfExtents(layer)
+    val radians = Math.toRadians(layer.rotationDegrees.toDouble())
+    return Pair(center.first + (half.first * cos(radians) + half.second * sin(radians)).toFloat(), center.second + (half.first * sin(radians) - half.second * cos(radians)).toFloat())
   }
 
   private fun isHandleHit(layer: PhotoLayer, x: Float, y: Float): Boolean {

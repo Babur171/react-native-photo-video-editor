@@ -70,7 +70,7 @@ export interface EditorOptions {
   /** Native UI theme. */ theme?: EditorTheme;
   /** Export preferences. */ export?: ExportOptions;
   /** Requests saving to the gallery. Currently ignored by the placeholder. */ saveToGallery?: boolean;
-  /** ID in stickerAssets to insert at the media center when the editor opens. */ initialStickerId?: string;
+  /** Ordered, unique IDs in stickerAssets. The first starts centered; the sticker’s top-right control cycles through the rest. */ initialStickerIds?: string[];
   /** Consumer-provided stickers offered by the Stickers tool, in addition to the small built-in set and end-user uploads. */ stickerAssets?: StickerAsset[];
   /** Consumer-provided fonts selectable from the Text tool. */ fonts?: FontAsset[];
 }
