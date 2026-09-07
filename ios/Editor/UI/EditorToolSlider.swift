@@ -7,6 +7,8 @@ final class EditorToolSlider: UISlider {
   override func trackRect(forBounds bounds: CGRect) -> CGRect {
     var rect = super.trackRect(forBounds: bounds)
     rect.origin.y = bounds.height * 0.65
+    rect.origin.x = bounds.origin.x + 16
+    rect.size.width = max(0, bounds.width - 32)
     return rect
   }
   override func draw(_ rect: CGRect) {
@@ -15,8 +17,8 @@ final class EditorToolSlider: UISlider {
     let suffix = propertyKey == "rotation" ? "°" : (propertyKey == "fontSize" ? "" : "%")
     let valueText = "\(Int(value.rounded()))\(suffix)"
     let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium), .foregroundColor: DesignTokens.textSecondary]
-    (title as NSString).draw(at: CGPoint(x: 4, y: 4), withAttributes: attributes)
+    (title as NSString).draw(at: CGPoint(x: 16, y: 8), withAttributes: attributes)
     let size = (valueText as NSString).size(withAttributes: attributes)
-    (valueText as NSString).draw(at: CGPoint(x: bounds.width - size.width - 4, y: 4), withAttributes: attributes)
+    (valueText as NSString).draw(at: CGPoint(x: bounds.width - size.width - 16, y: 8), withAttributes: attributes)
   }
 }

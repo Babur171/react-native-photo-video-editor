@@ -36,23 +36,26 @@ public class PhotoVideoEditorSwift: NSObject {
     controller.completion = { [weak self, weak controller] outcome in
       guard let self else { return }
       self.editorOpen = false
-      controller?.dismiss(animated: true)
-      switch outcome {
-      case .cancelled:
-        var result: [String: Any] = ["uri": uri, "type": type, "cancelled": true]
-        if let mimeType = source["mimeType"] as? String, !mimeType.isEmpty { result["mimeType"] = mimeType }
-        PhotoVideoEditorSwift.resolveResult(result, resolve: resolve, reject: reject)
-      case let .success(resultUri, mimeType, width, height, fileSize, durationMs):
-        var result: [String: Any] = ["uri": resultUri, "type": type, "cancelled": false]
-        let resolvedMimeType = mimeType ?? (source["mimeType"] as? String)
-        if let resolvedMimeType, !resolvedMimeType.isEmpty { result["mimeType"] = resolvedMimeType }
-        if let width { result["width"] = width }
-        if let height { result["height"] = height }
-        if let fileSize { result["fileSize"] = fileSize }
-        if let durationMs { result["duration"] = durationMs }
-        PhotoVideoEditorSwift.resolveResult(result, resolve: resolve, reject: reject)
-      case let .failure(code, message):
-        reject(code, message, nil)
+      DispatchQueue.main.async {
+        controller?.dismiss(animated: true) {
+          switch outcome {
+          case .cancelled:
+            var result: [String: Any] = ["uri": uri, "type": type, "cancelled": true]
+            if let mimeType = source["mimeType"] as? String, !mimeType.isEmpty { result["mimeType"] = mimeType }
+            PhotoVideoEditorSwift.resolveResult(result, resolve: resolve, reject: reject)
+          case let .success(resultUri, mimeType, width, height, fileSize, durationMs):
+            var result: [String: Any] = ["uri": resultUri, "type": type, "cancelled": false]
+            let resolvedMimeType = mimeType ?? (source["mimeType"] as? String)
+            if let resolvedMimeType, !resolvedMimeType.isEmpty { result["mimeType"] = resolvedMimeType }
+            if let width { result["width"] = width }
+            if let height { result["height"] = height }
+            if let fileSize { result["fileSize"] = fileSize }
+            if let durationMs { result["duration"] = durationMs }
+            PhotoVideoEditorSwift.resolveResult(result, resolve: resolve, reject: reject)
+          case let .failure(code, message):
+            reject(code, message, nil)
+          }
+        }
       }
     }
     DispatchQueue.main.async { presenter.present(controller, animated: true) }

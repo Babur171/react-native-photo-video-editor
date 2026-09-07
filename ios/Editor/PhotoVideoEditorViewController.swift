@@ -59,6 +59,9 @@ final class PhotoVideoEditorViewController: UIViewController {
   private var redoButton: UIButton?
   private var progressOverlay: UIView?
   private var photoPreviewRenderPending = false
+  private var isRenderingPhotoPreview = false
+  private let photoRenderQueue = DispatchQueue(label: "pve.photo.render", qos: .userInteractive)
+  private var drawColorSwatches: [(UIColor, UIButton)] = []
   private var comparingOriginal = false
   private var selectedPhotoExportFormat: String?
 
@@ -172,6 +175,14 @@ final class PhotoVideoEditorViewController: UIViewController {
       }
       self.view.layoutIfNeeded()
       self.handlePickedImage(url, image: image, purpose: self.mediaType == "photo" ? .photoSticker : .videoSticker)
+    }
+  }
+
+  override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    if mediaType == "photo" {
+      photoImageView?.resetToFit()
+      schedulePhotoPreviewRender()
     }
   }
 
@@ -357,7 +368,8 @@ final class PhotoVideoEditorViewController: UIViewController {
       filtersBar.heightAnchor.constraint(equalToConstant: EditorPanelMetrics.totalHeight + 24),
       stickersBar.heightAnchor.constraint(equalToConstant: 56),
       drawBar.heightAnchor.constraint(equalToConstant: 56),
-      layerBar.heightAnchor.constraint(equalToConstant: 76),
+      layerSlider.heightAnchor.constraint(equalToConstant: 64),
+      layerBar.heightAnchor.constraint(equalToConstant: 68),
       colorSwatchRow.heightAnchor.constraint(equalToConstant: 56),
     ])
 
@@ -387,75 +399,122 @@ final class PhotoVideoEditorViewController: UIViewController {
     imageView.resetToFit()
   }
 
-  /// Icon-tile + label node in the main tool rail (Studio Violet "Tool Node"). Mirrors Android's `ToolNode`.
-  private struct ToolNode {
-    let root: UIView
-    let tile: UIView
+  /// Interactive tool dock button with tactile feedback, balanced icon/label spacing,
+  /// and seamless scroll coordination without conflicting gesture recognizers.
+  private final class ToolButton: UIControl {
+    let tile = UIView()
     let icon: UIImageView
-    let label: UILabel
+    let label = UILabel()
+    private var onTapAction: (() -> Void)?
+
+    init(systemName: String, labelText: String, onTap: (() -> Void)? = nil) {
+      self.onTapAction = onTap
+      self.icon = UIImageView(image: UIImage(systemName: systemName))
+      super.init(frame: .zero)
+      setupViews(labelText: labelText)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func setupViews(labelText: String) {
+      isAccessibilityElement = true
+      accessibilityLabel = labelText
+      accessibilityTraits = .button
+
+      tile.isUserInteractionEnabled = false
+      tile.backgroundColor = .clear
+      tile.layer.cornerRadius = 15
+      tile.clipsToBounds = true
+
+      icon.isUserInteractionEnabled = false
+      icon.tintColor = DesignTokens.textSecondary
+      icon.contentMode = .scaleAspectFit
+
+      tile.addSubview(icon)
+      icon.translatesAutoresizingMaskIntoConstraints = false
+      NSLayoutConstraint.activate([
+        icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
+        icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
+        icon.widthAnchor.constraint(equalToConstant: 18),
+        icon.heightAnchor.constraint(equalToConstant: 18),
+      ])
+
+      label.isUserInteractionEnabled = false
+      label.text = labelText
+      label.font = .systemFont(ofSize: 11, weight: .medium)
+      label.textColor = DesignTokens.textSecondary
+      label.textAlignment = .center
+      label.numberOfLines = 1
+      label.adjustsFontSizeToFitWidth = true
+      label.minimumScaleFactor = 0.85
+
+      let contentStack = UIStackView(arrangedSubviews: [tile, label])
+      contentStack.axis = .vertical
+      contentStack.alignment = .center
+      contentStack.spacing = 3
+      contentStack.isUserInteractionEnabled = false
+
+      addSubview(contentStack)
+      contentStack.translatesAutoresizingMaskIntoConstraints = false
+      NSLayoutConstraint.activate([
+        tile.widthAnchor.constraint(equalToConstant: 30),
+        tile.heightAnchor.constraint(equalToConstant: 30),
+        contentStack.centerXAnchor.constraint(equalTo: centerXAnchor),
+        contentStack.centerYAnchor.constraint(equalTo: centerYAnchor),
+        label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 2),
+        label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -2),
+      ])
+
+      if onTapAction != nil {
+        addTarget(self, action: #selector(handleTap), for: .touchUpInside)
+      }
+    }
+
+    @objc private func handleTap() {
+      onTapAction?()
+    }
+
+    override var isHighlighted: Bool {
+      didSet {
+        UIView.animate(
+          withDuration: isHighlighted ? 0.08 : 0.14,
+          delay: 0,
+          options: [.allowUserInteraction, .beginFromCurrentState],
+          animations: { self.transform = self.isHighlighted ? CGAffineTransform(scaleX: 0.94, y: 0.94) : .identity }
+        )
+      }
+    }
+
+    func setSelectedState(_ selected: Bool, accent: UIColor) {
+      accessibilityTraits = selected ? [.button, .selected] : .button
+      tile.backgroundColor = selected ? accent.withAlphaComponent(0.18) : .clear
+      icon.tintColor = selected ? accent : DesignTokens.textSecondary
+      label.textColor = selected ? accent : DesignTokens.textSecondary
+    }
+  }
+
+  /// Icon-tile + label node in the main tool rail (Studio Violet "Tool Node").
+  private struct ToolNode {
+    let button: ToolButton
+    var root: UIView { button }
+    var tile: UIView { button.tile }
+    var icon: UIImageView { button.icon }
+    var label: UILabel { button.label }
   }
 
   private var photoToolNodes: [String: ToolNode] = [:]
   private weak var photoToolScroll: UIScrollView?
-  /// Backs `createToolNode`'s tap handling: each node's root view registers its action here, keyed by
-  /// its own identity, and a single shared `UITapGestureRecognizer` target (`self`) looks it up.
-  private var toolNodeActions: [ObjectIdentifier: () -> Void] = [:]
 
-  @objc private func handleToolNodeTap(_ recognizer: UITapGestureRecognizer) {
-    guard let view = recognizer.view else { return }
-    toolNodeActions[ObjectIdentifier(view)]?()
-  }
-
-  private func createToolNode(systemName: String, labelText: String, onTap: @escaping () -> Void) -> ToolNode {
-    let icon = UIImageView(image: UIImage(systemName: systemName))
-    icon.tintColor = DesignTokens.textSecondary
-    icon.contentMode = .scaleAspectFit
-    let tile = UIView()
-    tile.backgroundColor = .clear
-    tile.layer.cornerRadius = DesignTokens.touchTargetMin / 2
-    tile.addSubview(icon)
-    icon.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-      icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
-      icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
-      icon.widthAnchor.constraint(equalToConstant: 22),
-      icon.heightAnchor.constraint(equalToConstant: 22),
-    ])
-    let label = UILabel()
-    label.text = labelText
-    label.font = .systemFont(ofSize: 11, weight: .medium)
-    label.textColor = DesignTokens.textSecondary
-    label.textAlignment = .center
-    // Labels like "Stickers" must never wrap to a second line.
-    label.numberOfLines = 1
-    label.adjustsFontSizeToFitWidth = true
-    label.minimumScaleFactor = 0.85
-    let root = UIStackView(arrangedSubviews: [tile, label])
-    root.axis = .vertical
-    root.alignment = .center
-    root.spacing = 4
-    root.isUserInteractionEnabled = true
-    toolNodeActions[ObjectIdentifier(root)] = onTap
-    root.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleToolNodeTap(_:))))
-    root.applyPressScale()
-    root.isAccessibilityElement = true
-    root.accessibilityLabel = labelText
-    root.accessibilityTraits = .button
-    NSLayoutConstraint.activate([
-      tile.widthAnchor.constraint(equalToConstant: DesignTokens.touchTargetMin),
-      tile.heightAnchor.constraint(equalToConstant: DesignTokens.touchTargetMin),
-    ])
-    return ToolNode(root: root, tile: tile, icon: icon, label: label)
+  private func createToolNode(systemName: String, labelText: String, onTap: (() -> Void)? = nil) -> ToolNode {
+    let button = ToolButton(systemName: systemName, labelText: labelText, onTap: onTap)
+    return ToolNode(button: button)
   }
 
   /// Selection is a purple icon + label over a faint purple disc — not a filled tile, which at dock
   /// size reads as a large button and fights the photo for attention.
   private func setToolNodeSelected(_ node: ToolNode, selected: Bool, textColor: UIColor) {
     let accent = color("primaryColor") ?? DesignTokens.primaryContainer
-    node.root.accessibilityTraits = selected ? [.button, .selected] : .button
-    node.tile.backgroundColor = selected ? accent.withAlphaComponent(0.18) : .clear
-    node.icon.tintColor = selected ? accent : DesignTokens.textSecondary
-    node.label.textColor = selected ? accent : DesignTokens.textSecondary
+    node.button.setSelectedState(selected, accent: accent)
   }
 
   /// Full Studio Violet tool rail (see main_photo_editor_default_state mockup). Rotate lives inside
@@ -463,43 +522,53 @@ final class PhotoVideoEditorViewController: UIViewController {
   private func makePhotoToolBar(textColor: UIColor, toolbarColor: UIColor) -> UIView {
     let tools: [(String, String, String)] = [
       ("crop", "Crop", "crop"),
+      ("rotate", "Rotate", "rotate.right"),
       ("adjust", "Adjust", "slider.horizontal.3"),
       ("filters", "Filters", "camera.filters"),
       ("text", "Text", "textformat"),
       ("stickers", "Stickers", "face.smiling"),
       ("draw", "Draw", "pencil.tip"),
+      ("overlay", "Overlay", "plus.rectangle.on.rectangle"),
       ("resize", "Resize", "aspectratio"),
     ]
-    let scroll = UIScrollView(); scroll.backgroundColor = toolbarColor
+    let scroll = UIScrollView()
+    scroll.backgroundColor = toolbarColor
     scroll.showsHorizontalScrollIndicator = false
+    scroll.alwaysBounceHorizontal = true
+    scroll.delaysContentTouches = true
+    scroll.canCancelContentTouches = true
     photoToolScroll = scroll
-    let stack = UIStackView(); stack.axis = .horizontal; stack.spacing = DesignTokens.spaceXs
-    // Width that shows about five tools at once, so the dock fills the screen evenly on a small
-    // phone and does not leave large gaps on a large one.
-    let itemWidth = Swift.min(Swift.max(UIScreen.main.bounds.width / 5, 64), 88)
-    tools.filter { features[$0.0] as? Bool != false }.forEach { key, label, symbol in
+    let stack = UIStackView()
+    stack.axis = .horizontal
+    stack.spacing = 2
+    let itemWidth: CGFloat = 58
+    tools.filter { key, _, _ in
+      if key == "overlay" {
+        return (features["overlay"] as? Bool ?? features["overlays"] as? Bool) != false
+      }
+      return features[key] as? Bool != false
+    }.forEach { key, label, symbol in
       let node = createToolNode(systemName: symbol, labelText: label) { [weak self] in self?.onPhotoToolTapped(key) }
-      node.root.widthAnchor.constraint(equalToConstant: itemWidth).isActive = true
+      node.button.widthAnchor.constraint(equalToConstant: itemWidth).isActive = true
       photoToolNodes[key] = node
-      stack.addArrangedSubview(node.root)
+      stack.addArrangedSubview(node.button)
     }
-    // Built with the same node factory as the other seven so the dock has one visual language;
-    // a zero-duration long press gives it the press-and-hold behaviour a tap gesture cannot.
-    let compare = createToolNode(systemName: "rectangle.split.2x1", labelText: "Original") {}
-    compare.root.accessibilityLabel = "Hold to compare with original"
-    compare.root.widthAnchor.constraint(equalToConstant: itemWidth).isActive = true
-    let hold = UILongPressGestureRecognizer(target: self, action: #selector(compareHeld(_:)))
-    hold.minimumPressDuration = 0
-    compare.root.addGestureRecognizer(hold)
+    // "Original" compare button uses native touch-down / touch-up events without gesture recognizers.
+    let compare = createToolNode(systemName: "rectangle.split.2x1", labelText: "Original")
+    compare.button.accessibilityLabel = "Hold to compare with original"
+    compare.button.widthAnchor.constraint(equalToConstant: itemWidth).isActive = true
+    compare.button.addTarget(self, action: #selector(compareTouchDown), for: .touchDown)
+    compare.button.addTarget(self, action: #selector(compareTouchUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
     photoToolNodes["compare"] = compare
-    stack.addArrangedSubview(compare.root)
+    stack.addArrangedSubview(compare.button)
+
     scroll.addSubview(stack)
     stack.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
       stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 12),
-      stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -12),
+      scroll.contentLayoutGuide.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: 12),
       stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-      stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+      scroll.contentLayoutGuide.bottomAnchor.constraint(equalTo: stack.bottomAnchor),
       stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
     ])
     return scroll
@@ -531,6 +600,10 @@ final class PhotoVideoEditorViewController: UIViewController {
     switch key {
     case "crop":
       setCropMode(true)
+    case "rotate":
+      session.update { $0.rotateRight(); $0.zoom = 1; $0.panX = 0; $0.panY = 0 }
+      photoCropPanel?.sync(session.state)
+      schedulePhotoPreviewRender()
     case "adjust":
       setAdjustMode(true, session: session)
     case "filters":
@@ -543,6 +616,8 @@ final class PhotoVideoEditorViewController: UIViewController {
       presentOnlineStickerSheet(purpose: .photoSticker)
     case "draw":
       setDrawMode(true, session: session)
+    case "overlay", "overlays":
+      presentImagePicker(purpose: .photoOverlay)
     case "resize":
       setCropMode(true)
     default:
@@ -584,6 +659,10 @@ final class PhotoVideoEditorViewController: UIViewController {
   private func makeStickersSubBar(session: PhotoEditSession, textColor: UIColor, primaryColor: UIColor, toolbarColor: UIColor) -> UIView {
     let bar = UIStackView(); bar.axis = .horizontal; bar.alignment = .center
     let scroll = UIScrollView()
+    scroll.showsHorizontalScrollIndicator = false
+    scroll.alwaysBounceHorizontal = true
+    scroll.delaysContentTouches = true
+    scroll.canCancelContentTouches = true
     let chipStack = UIStackView(); chipStack.axis = .horizontal; chipStack.spacing = 4
     PhotoLayerRenderer.builtinStickerIDs().forEach { id in
       chipStack.addArrangedSubview(button(PhotoLayerRenderer.glyph(for: id)) { [weak self] in
@@ -613,9 +692,9 @@ final class PhotoVideoEditorViewController: UIViewController {
     chipStack.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
       chipStack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
-      chipStack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
+      scroll.contentLayoutGuide.trailingAnchor.constraint(equalTo: chipStack.trailingAnchor, constant: 8),
       chipStack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-      chipStack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+      scroll.contentLayoutGuide.bottomAnchor.constraint(equalTo: chipStack.bottomAnchor),
       chipStack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
     ])
     bar.addArrangedSubview(scroll)
@@ -634,8 +713,9 @@ final class PhotoVideoEditorViewController: UIViewController {
     layerOverlay?.isHidden = enabled
     photoImageView?.panZoomEnabled = !enabled
     if enabled {
-      drawOverlay?.strokeColor = .red
+      drawOverlay?.strokeColor = .systemRed
       drawOverlay?.strokeWidthPx = 4
+      updateDrawSwatches(selected: .systemRed)
       if let bounds = photoImageView?.currentImageBounds() { drawOverlay?.setImageBounds(bounds) }
     } else {
       commitDrawStrokes(session: session)
@@ -663,21 +743,53 @@ final class PhotoVideoEditorViewController: UIViewController {
   }
 
   private func makeDrawSubBar(textColor: UIColor, primaryColor: UIColor, toolbarColor: UIColor) -> UIView {
-    let colors: [(String, UIColor)] = [("Red", .red), ("Yellow", .yellow), ("Green", .green), ("Blue", .systemBlue), ("White", .white), ("Black", .black)]
+    drawColorSwatches.removeAll()
+    let colors: [(String, UIColor)] = [
+      ("Red", .systemRed),
+      ("Yellow", .systemYellow),
+      ("Green", .systemGreen),
+      ("Blue", .systemBlue),
+      ("Purple", DesignTokens.primary),
+      ("Pink", .systemPink),
+      ("White", .white),
+      ("Black", .black),
+    ]
     let bar = UIStackView(); bar.axis = .horizontal; bar.alignment = .center
     let scroll = UIScrollView()
-    let controls = UIStackView(); controls.axis = .horizontal; controls.spacing = 4
-    colors.forEach { label, value in controls.addArrangedSubview(button(label, color: value) { [weak self] in self?.drawOverlay?.strokeColor = value }) }
+    scroll.showsHorizontalScrollIndicator = false
+    scroll.alwaysBounceHorizontal = true
+    scroll.delaysContentTouches = true
+    scroll.canCancelContentTouches = true
+    let controls = UIStackView(); controls.axis = .horizontal; controls.spacing = 6
+    controls.alignment = .center
+
+    colors.forEach { name, color in
+      let swatch = createDrawColorSwatch(color: color) { [weak self] in
+        self?.drawOverlay?.strokeColor = color
+        self?.updateDrawSwatches(selected: color)
+      }
+      swatch.accessibilityLabel = name
+      drawColorSwatches.append((color, swatch))
+      controls.addArrangedSubview(swatch)
+    }
+
+    let divider = UIView()
+    divider.backgroundColor = DesignTokens.surfaceContainerHigh
+    divider.widthAnchor.constraint(equalToConstant: 1).isActive = true
+    divider.heightAnchor.constraint(equalToConstant: 24).isActive = true
+    controls.addArrangedSubview(divider)
+
     controls.addArrangedSubview(button("Thin", color: textColor) { [weak self] in self?.drawOverlay?.strokeWidthPx = 2 })
     controls.addArrangedSubview(button("Thick", color: textColor) { [weak self] in self?.drawOverlay?.strokeWidthPx = 10 })
     controls.addArrangedSubview(button("Undo", color: textColor) { [weak self] in self?.drawOverlay?.undoLastStroke() })
     controls.addArrangedSubview(button("Clear", color: textColor) { [weak self] in self?.drawOverlay?.clearStrokes() })
+
     scroll.addSubview(controls); controls.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
       controls.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
-      controls.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
+      scroll.contentLayoutGuide.trailingAnchor.constraint(equalTo: controls.trailingAnchor, constant: 8),
       controls.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-      controls.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+      scroll.contentLayoutGuide.bottomAnchor.constraint(equalTo: controls.bottomAnchor),
       controls.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
     ])
     bar.addArrangedSubview(scroll)
@@ -688,7 +800,41 @@ final class PhotoVideoEditorViewController: UIViewController {
     bar.backgroundColor = toolbarColor
     bar.isLayoutMarginsRelativeArrangement = true
     bar.layoutMargins = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+    updateDrawSwatches(selected: .systemRed)
     return bar
+  }
+
+  private func createDrawColorSwatch(color: UIColor, onTap: @escaping () -> Void) -> UIButton {
+    let outer = UIButton(type: .custom)
+    outer.backgroundColor = DesignTokens.surfaceContainerHigh
+    outer.layer.cornerRadius = 16
+    outer.widthAnchor.constraint(equalToConstant: 32).isActive = true
+    outer.heightAnchor.constraint(equalToConstant: 32).isActive = true
+    let inner = UIView()
+    inner.backgroundColor = color
+    inner.layer.cornerRadius = 10
+    inner.isUserInteractionEnabled = false
+    inner.translatesAutoresizingMaskIntoConstraints = false
+    outer.addSubview(inner)
+    NSLayoutConstraint.activate([
+      inner.centerXAnchor.constraint(equalTo: outer.centerXAnchor),
+      inner.centerYAnchor.constraint(equalTo: outer.centerYAnchor),
+      inner.widthAnchor.constraint(equalToConstant: 20),
+      inner.heightAnchor.constraint(equalToConstant: 20),
+    ])
+    outer.addAction(UIAction { _ in onTap() }, for: .touchUpInside)
+    outer.applyPressScale()
+    return outer
+  }
+
+  private func updateDrawSwatches(selected: UIColor) {
+    let primary = color("primaryColor") ?? DesignTokens.primaryContainer
+    drawColorSwatches.forEach { color, swatch in
+      let isSel = color == selected
+      swatch.layer.borderWidth = isSel ? 2 : 0
+      swatch.layer.borderColor = primary.cgColor
+      swatch.accessibilityTraits = isSel ? [.button, .selected] : .button
+    }
   }
 
   private func consumerStickerAssets() -> [(id: String, uri: String)] {
@@ -803,7 +949,7 @@ final class PhotoVideoEditorViewController: UIViewController {
 
   /// Keeps the active tool-rail node fully visible, never partially clipped at the scroll edge.
   private func scrollToolNodeIntoView(_ node: ToolNode) {
-    guard let scroll = photoToolScroll else { return }
+    guard let scroll = photoToolScroll, !cropMode, !scroll.isHidden else { return }
     DispatchQueue.main.async {
       let frame = node.root.convert(node.root.bounds, to: scroll)
       scroll.scrollRectToVisible(frame.insetBy(dx: -DesignTokens.spaceSm, dy: 0), animated: true)
@@ -811,7 +957,10 @@ final class PhotoVideoEditorViewController: UIViewController {
   }
 
   private func selectLayer(_ id: String?) {
-    if selectedLayerID != id { activeLayerPropertyKey = "" }
+    if selectedLayerID != id {
+      let isSticker = photoSession?.layerStack.layers.first(where: { $0.id == id })?.type == .sticker
+      activeLayerPropertyKey = isSticker ? "opacity" : ""
+    }
     selectedLayerID = id
     layerOverlay?.selectedLayerID = id
     if let session = photoSession {
@@ -831,9 +980,11 @@ final class PhotoVideoEditorViewController: UIViewController {
     layerToolBar?.isHidden = !visible
     mainToolBar?.isHidden = visible
     let isText = currentSelectedLayer()?.type == .text
-    let simple = isText || currentSelectedLayer()?.type == .sticker
+    let isSticker = currentSelectedLayer()?.type == .sticker
+    let simple = isText || isSticker
     ["scale", "lock", "visibility", "front", "back"].forEach { layerPropertyButtons[$0]?.isHidden = simple }
     ["edit", "color", "fontSize"].forEach { layerPropertyButtons[$0]?.isHidden = !isText }
+    if isSticker && activeLayerPropertyKey.isEmpty { activeLayerPropertyKey = "opacity" }
     if !isText && ["color", "fontSize"].contains(activeLayerPropertyKey) { activeLayerPropertyKey = "" }
     layerPropertySlider?.isHidden = !visible || !["scale", "rotation", "opacity", "fontSize"].contains(activeLayerPropertyKey)
     layerColorSwatchRow?.isHidden = !visible || activeLayerPropertyKey != "color"
@@ -933,18 +1084,18 @@ final class PhotoVideoEditorViewController: UIViewController {
     let control = UIButton(type: .system)
     var config = UIButton.Configuration.plain()
     config.title = label
-    config.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .regular))
+    config.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular))
     config.imagePlacement = .top
-    config.imagePadding = 6
+    config.imagePadding = 4
     config.baseForegroundColor = DesignTokens.outline
     config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
-      var value = incoming; value.font = .systemFont(ofSize: 11, weight: .medium); return value
+      var value = incoming; value.font = .systemFont(ofSize: 10, weight: .medium); return value
     }
-    config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 4, bottom: 8, trailing: 4)
+    config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 2, bottom: 6, trailing: 2)
     control.configuration = config
     control.accessibilityLabel = label
-    let width = control.widthAnchor.constraint(equalToConstant: 68); width.priority = .defaultHigh; width.isActive = true
-    control.heightAnchor.constraint(equalToConstant: 72).isActive = true
+    let width = control.widthAnchor.constraint(equalToConstant: 54); width.priority = .defaultHigh; width.isActive = true
+    control.heightAnchor.constraint(equalToConstant: 68).isActive = true
     control.addAction(UIAction { _ in action() }, for: .touchUpInside)
     control.applyPressScale()
     return control
@@ -964,8 +1115,12 @@ final class PhotoVideoEditorViewController: UIViewController {
     var actions = [("edit", "Edit", "pencil"), ("color", "Color", "paintpalette"), ("fontSize", "Size", "textformat.size"), ("rotation", "Rotate", "arrow.clockwise"), ("opacity", "Opacity", "circle.lefthalf.filled"), ("scale", "Scale", "arrow.up.left.and.arrow.down.right"), ("duplicate", "Duplicate", "square.on.square"), ("delete", "Delete", "trash")]
     if !video { actions += [("lock", "Lock", "lock"), ("visibility", "Hide", "eye.slash"), ("front", "Front", "square.3.layers.3d.top.filled"), ("back", "Back", "square.3.layers.3d.bottom.filled")] }
     let bar = UIStackView(); bar.axis = .horizontal; bar.alignment = .center
-    let scroll = UIScrollView(); scroll.showsHorizontalScrollIndicator = false
-    let stack = UIStackView(); stack.axis = .horizontal
+    let scroll = UIScrollView()
+    scroll.showsHorizontalScrollIndicator = false
+    scroll.alwaysBounceHorizontal = true
+    scroll.delaysContentTouches = true
+    scroll.canCancelContentTouches = true
+    let stack = UIStackView(); stack.axis = .horizontal; stack.spacing = 2
     actions.forEach { key, label, symbol in
       let control = toolButton(label, symbol: symbol) { action(key) }
       if video { videoLayerPropertyButtons[key] = control } else { layerPropertyButtons[key] = control }
@@ -973,12 +1128,12 @@ final class PhotoVideoEditorViewController: UIViewController {
     }
     scroll.addSubview(stack); stack.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
-      stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
+      stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 6),
+      scroll.contentLayoutGuide.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: 6),
       stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-      stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+      scroll.contentLayoutGuide.bottomAnchor.constraint(equalTo: stack.bottomAnchor),
       stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
-      scroll.heightAnchor.constraint(equalToConstant: 72),
+      scroll.heightAnchor.constraint(equalToConstant: 68),
     ])
     bar.addArrangedSubview(scroll)
     let done = toolButton("Done", symbol: "checkmark") { action("done") }
@@ -1029,7 +1184,11 @@ final class PhotoVideoEditorViewController: UIViewController {
   }
 
   private func makeTextPalette(video: Bool, onColor: @escaping (UIColor) -> Void) -> UIView {
-    let scroll = UIScrollView(); scroll.showsHorizontalScrollIndicator = false
+    let scroll = UIScrollView()
+    scroll.showsHorizontalScrollIndicator = false
+    scroll.alwaysBounceHorizontal = true
+    scroll.delaysContentTouches = true
+    scroll.canCancelContentTouches = true
     scroll.backgroundColor = color("toolbarColor") ?? DesignTokens.surfaceContainerLow
     let stack = UIStackView(); stack.axis = .horizontal; stack.spacing = 4
     let colors: [(String, UIColor)] = [("White", .white), ("Black", .black), ("Red", .systemRed), ("Orange", .systemOrange), ("Yellow", .systemYellow), ("Green", .systemGreen), ("Blue", .systemBlue), ("Purple", DesignTokens.primary), ("Pink", .systemPink)]
@@ -1042,9 +1201,9 @@ final class PhotoVideoEditorViewController: UIViewController {
     scroll.addSubview(stack); stack.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
       stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 12),
-      stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -12),
+      scroll.contentLayoutGuide.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: 12),
       stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-      stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+      scroll.contentLayoutGuide.bottomAnchor.constraint(equalTo: stack.bottomAnchor),
       stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
     ])
     return scroll
@@ -1210,7 +1369,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     )
 
     let strip = UIStackView()
-    strip.spacing = DesignTokens.spaceXs
+    strip.spacing = 2
     photoAdjustmentDefinitions.forEach { key, label, symbol in
       let item = editorStripItem(systemName: symbol, labelText: label) { [weak self] in
         self?.activeAdjustmentKey = key
@@ -1317,7 +1476,7 @@ final class PhotoVideoEditorViewController: UIViewController {
   }
 
   @objc private func straightenChanged(_ slider: UISlider) {
-    guard let session = photoSession, let imageView = photoImageView else { return }
+    guard let session = photoSession, photoImageView != nil else { return }
     session.update { $0.setStraighten(CGFloat(slider.value)) }
     schedulePhotoPreviewRender()
   }
@@ -1624,10 +1783,9 @@ final class PhotoVideoEditorViewController: UIViewController {
       toolbar.bottomAnchor.constraint(equalTo: toolbarWrapper.bottomAnchor, constant: -DesignTokens.spaceSm),
     ])
 
-    // The editor is intentionally single-video: omit the multi-clip strip and
-    // its Split/Copy/Delete/Reorder controls from the visible layout. Playback
-    // controls (transport/position) live inside `preview` itself, not in this stack.
-    let root = UIStackView(arrangedSubviews: [header, previewWrapper, cropPanel, aspectBar, layerSlider, palette, layerBar, toolbarWrapper])
+    let trimEnabled = features["trim"] as? Bool != false
+    trim.isHidden = !trimEnabled
+    let root = UIStackView(arrangedSubviews: [header, previewWrapper, trim, cropPanel, aspectBar, layerSlider, palette, layerBar, toolbarWrapper])
     root.axis = .vertical
     root.spacing = DesignTokens.spaceSm
     root.translatesAutoresizingMaskIntoConstraints = false
@@ -1639,9 +1797,8 @@ final class PhotoVideoEditorViewController: UIViewController {
       root.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
       header.heightAnchor.constraint(equalToConstant: 60),
       trim.heightAnchor.constraint(equalToConstant: 48),
-      stripScroll.heightAnchor.constraint(equalToConstant: 40),
       aspectBar.heightAnchor.constraint(equalToConstant: 56),
-      layerBar.heightAnchor.constraint(equalToConstant: 76),
+      layerBar.heightAnchor.constraint(equalToConstant: 68),
       toolbar.heightAnchor.constraint(equalToConstant: 52),
     ])
 
@@ -1776,10 +1933,11 @@ final class PhotoVideoEditorViewController: UIViewController {
   }
 
   /// Where the video actually renders within `view` under aspect-fit letterboxing (mirrors `ZoomableImageView.currentImageBounds()`'s math).
-  private func videoSourceSize(session:VideoEditSession) -> CGSize {
-    guard let clip = session.clips.first,let track = session.asset(for:clip).tracks(withMediaType:.video).first else { return CGSize(width:1,height:1) }
+  private func videoSourceSize(session: VideoEditSession) -> CGSize {
+    if session.naturalSize != .zero { return session.naturalSize }
+    guard let clip = session.clips.first, let track = session.asset(for: clip).tracks(withMediaType: .video).first else { return CGSize(width: 1, height: 1) }
     let size = track.naturalSize.applying(track.preferredTransform)
-    return CGSize(width:max(1,abs(size.width)),height:max(1,abs(size.height)))
+    return CGSize(width: max(1, abs(size.width)), height: max(1, abs(size.height)))
   }
 
   private func videoMediaBounds(session:VideoEditSession,in view:UIView,cropped:Bool) -> CGRect {
@@ -1951,20 +2109,48 @@ final class PhotoVideoEditorViewController: UIViewController {
   /// actions warrant. `textformat` renders as "Aa", which reads as typography where a lone "T" does not.
   private func makeVideoToolBar(session: VideoEditSession, playerController: AVPlayerViewController) -> UIView {
     let tools: [(String, String, String)] = [
-      ("text", "Text", "textformat"), ("stickers", "Stickers", "face.smiling"),
+      ("trim", "Trim", "arrow.left.and.right"),
+      ("crop", "Crop", "crop"),
+      ("rotate", "Rotate", "rotate.right"),
+      ("speed", "Speed", "gauge.with.dots.needle.50percent"),
+      ("text", "Text", "textformat"),
+      ("stickers", "Stickers", "face.smiling"),
+      ("overlay", "Overlay", "plus.rectangle.on.rectangle"),
+      ("cover", "Cover", "photo"),
     ]
-    let dock = UIStackView()
-    dock.axis = .horizontal
-    dock.distribution = .fillEqually
-    dock.backgroundColor = DesignTokens.surfaceContainer
-    dock.layer.cornerRadius = 18
-    dock.clipsToBounds = true
-    tools.filter { features[$0.0] as? Bool != false }.forEach { key, label, symbol in
-      dock.addArrangedSubview(makeVideoDockAction(label: label, symbol: symbol) { [weak self, weak playerController] in
+    let scroll = UIScrollView()
+    scroll.backgroundColor = DesignTokens.surfaceContainer
+    scroll.layer.cornerRadius = 18
+    scroll.clipsToBounds = true
+    scroll.showsHorizontalScrollIndicator = false
+
+    let stack = UIStackView()
+    stack.axis = .horizontal
+    stack.spacing = DesignTokens.spaceXs
+
+    let itemWidth = Swift.min(Swift.max(UIScreen.main.bounds.width / 4.5, 76), 96)
+    tools.filter { key, _, _ in
+      if key == "overlay" {
+        return (features["overlay"] as? Bool ?? features["overlays"] as? Bool) != false
+      }
+      return features[key] as? Bool != false
+    }.forEach { key, label, symbol in
+      let control = makeVideoDockAction(label: label, symbol: symbol) { [weak self, weak playerController] in
         self?.onVideoToolTapped(key, session: session, playerView: playerController?.view)
-      })
+      }
+      control.widthAnchor.constraint(equalToConstant: itemWidth).isActive = true
+      stack.addArrangedSubview(control)
     }
-    return dock
+    scroll.addSubview(stack)
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
+      stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
+      stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+      stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+      stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+    ])
+    return scroll
   }
 
   /// One dock action: symbol + label on a single row, purple pill while pressed.
@@ -2007,7 +2193,11 @@ final class PhotoVideoEditorViewController: UIViewController {
 
   private func onVideoToolTapped(_ key: String, session: VideoEditSession, playerView: UIView?) {
     switch key {
-    case "crop": setVideoCropMode(true,session:session)
+    case "trim":
+      guard let trim = trimRangeView else { return }
+      trim.isHidden.toggle()
+    case "crop":
+      setVideoCropMode(true, session: session)
     case "cover":
       let atMs = Int64(CMTimeGetSeconds(session.player.currentTime()) * 1000)
       session.update { $0.coverFrameMs = atMs }
@@ -2015,17 +2205,17 @@ final class PhotoVideoEditorViewController: UIViewController {
     case "rotate":
       session.update { $0.rotateRight() }
       applyVideoPreviewTransform(playerView, state: session.state)
-    case "crop":
+    case "aspect", "resize":
       setVideoAspectMode(true, session: session)
     case "speed":
       session.update { $0.cycleSpeed() }
       if session.player.timeControlStatus == .playing { session.player.rate = session.state.speed }
-      videoToolButtons["speed"]?.setTitle(formatSpeedLabel(session.state.speed), for: .normal)
+      showToast(formatSpeedLabel(session.state.speed))
     case "text":
       showVideoTextInputDialog(session: session)
     case "stickers":
       showVideoStickerPicker(session: session)
-    case "overlay":
+    case "overlay", "overlays":
       presentImagePicker(purpose: .videoOverlay)
     default:
       showToast("\(key) is coming in a later milestone.")
@@ -2440,20 +2630,46 @@ final class PhotoVideoEditorViewController: UIViewController {
     present(sheet, animated: true)
   }
 
-  /// Coalesces slider and drag callbacks so bitmap composition runs at most once per display frame.
+  /// Coalesces slider and drag callbacks and performs rendering on a dedicated background queue
+  /// so the main thread remains at 120 FPS without slider hitching or dragging lag.
   private func schedulePhotoPreviewRender() {
-    guard !photoPreviewRenderPending else { return }
-    photoPreviewRenderPending = true
+    photoRenderQueue.async { [weak self] in
+      guard let self else { return }
+      if self.isRenderingPhotoPreview {
+        self.photoPreviewRenderPending = true
+        return
+      }
+      self.isRenderingPhotoPreview = true
+      self.performPhotoPreviewRender()
+    }
+  }
+
+  private func performPhotoPreviewRender() {
+    guard self.isViewLoaded,
+          let session = self.photoSession else {
+      self.isRenderingPhotoPreview = false
+      return
+    }
+    let isCropping = self.cropMode
+    let rendered = autoreleasepool {
+      session.renderPreview(cropping: isCropping)
+    }
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
-      self.photoPreviewRenderPending = false
-      guard self.viewIfLoaded?.window != nil,
-            let session = self.photoSession,
-            let imageView = self.photoImageView else { return }
-      autoreleasepool {
-        imageView.image = session.renderPreview(cropping:self.cropMode)
-        imageView.resetToFit()
-        if self.cropMode { self.cropOverlay?.restore(bounds:imageView.currentImageBounds(),state:session.state) }
+      if let rendered, let imageView = self.photoImageView {
+        imageView.image = rendered
+        if self.cropMode {
+          self.cropOverlay?.restore(bounds: imageView.currentImageBounds(), state: session.state)
+        }
+      }
+      self.photoRenderQueue.async { [weak self] in
+        guard let self else { return }
+        if self.photoPreviewRenderPending {
+          self.photoPreviewRenderPending = false
+          self.performPhotoPreviewRender()
+        } else {
+          self.isRenderingPhotoPreview = false
+        }
       }
     }
   }

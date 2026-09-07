@@ -1,18 +1,10 @@
 import CoreGraphics
 import UIKit
 
-/// Raw RGBA8 pixel access for a `UIImage`, used by adjustment/effect passes
-/// that need direct per-pixel math (tone curve, sharpen, box blur).
-///
-/// Important: a bitmap `CGContext` created via `CGContext(data:...)` has its
-/// origin at the bottom-left with Y increasing upward (Quartz-native), which
-/// is the OPPOSITE of the top-down row order `CGImage`/`UIImage` assume.
-/// Drawing into it without first flipping the CTM produces a vertically
-/// flipped image once the raw bytes are wrapped back into a `CGImage`. Both
-/// `init` and `makeImage()` apply that flip so round-tripping through this
-/// buffer preserves the image's orientation.
+/// Raw RGBA8 pixel access for a `UIImage`, optimized for high-throughput
+/// contiguous memory access.
 struct PixelBuffer {
-  private(set) var data: [UInt8]
+  var data: [UInt8]
   let width: Int
   let height: Int
   private static let bytesPerPixel = 4
@@ -32,23 +24,36 @@ struct PixelBuffer {
       space: CGColorSpaceCreateDeviceRGB(),
       bitmapInfo: Self.bitmapInfo
     ) else { return nil }
-    context.translateBy(x: 0, y: CGFloat(height))
-    context.scaleBy(x: 1, y: -1)
     context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
     data = buffer
   }
 
+  mutating func mutateBytes(_ body: (UnsafeMutablePointer<UInt8>, Int, Int, Int) -> Void) {
+    let count = data.count
+    let w = width
+    let h = height
+    data.withUnsafeMutableBufferPointer { buffer in
+      if let base = buffer.baseAddress {
+        body(base, count, w, h)
+      }
+    }
+  }
+
   func makeImage() -> UIImage? {
-    var buffer = data
-    guard let context = CGContext(
-      data: &buffer,
+    guard let provider = CGDataProvider(data: Data(data) as CFData) else { return nil }
+    guard let cgImage = CGImage(
       width: width,
       height: height,
       bitsPerComponent: 8,
+      bitsPerPixel: 32,
       bytesPerRow: width * Self.bytesPerPixel,
       space: CGColorSpaceCreateDeviceRGB(),
-      bitmapInfo: Self.bitmapInfo
-    ), let cgImage = context.makeImage() else { return nil }
+      bitmapInfo: CGBitmapInfo(rawValue: Self.bitmapInfo),
+      provider: provider,
+      decode: nil,
+      shouldInterpolate: false,
+      intent: .defaultIntent
+    ) else { return nil }
     return UIImage(cgImage: cgImage)
   }
 
@@ -66,3 +71,4 @@ struct PixelBuffer {
     }
   }
 }
+

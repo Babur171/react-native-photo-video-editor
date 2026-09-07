@@ -10,8 +10,8 @@ enum EditorPanelMetrics {
   static let headerHeight: CGFloat = 40
   static let sliderHeight: CGFloat = 48
   static let stripHeight: CGFloat = 76
-  static let stripItemWidth: CGFloat = 68
-  static let iconSize: CGFloat = 22
+  static let stripItemWidth: CGFloat = 58
+  static let iconSize: CGFloat = 20
   static let thumbnailWidth: CGFloat = 64
   static let thumbnailHeight: CGFloat = 72
   static var totalHeight: CGFloat { headerHeight + sliderHeight + stripHeight }
@@ -26,36 +26,52 @@ func editorPanelHeader(
   onSecondary: (() -> Void)? = nil,
   onDone: @escaping () -> Void
 ) -> UIView {
+  let container = UIStackView()
+  container.axis = .horizontal
+  container.alignment = .center
+  container.distribution = .equalSpacing
+  container.isLayoutMarginsRelativeArrangement = true
+  container.layoutMargins = UIEdgeInsets(
+    top: 0,
+    left: DesignTokens.spaceMd,
+    bottom: 0,
+    right: DesignTokens.spaceMd
+  )
+
   let titleLabel = UILabel()
   titleLabel.text = title
-  titleLabel.font = .systemFont(ofSize: 14, weight: .bold)
+  titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
   titleLabel.textColor = DesignTokens.textPrimary
+  container.addArrangedSubview(titleLabel)
 
-  let row = UIStackView(arrangedSubviews: [titleLabel])
-  row.axis = .horizontal
-  row.alignment = .center
-  row.spacing = DesignTokens.spaceSm
-  row.isLayoutMarginsRelativeArrangement = true
-  row.layoutMargins = UIEdgeInsets(top: 0, left: DesignTokens.spaceLg, bottom: 0, right: DesignTokens.spaceSm)
-
-  let spacer = UIView()
-  spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-  row.addArrangedSubview(spacer)
+  let actions = UIStackView()
+  actions.axis = .horizontal
+  actions.spacing = DesignTokens.spaceMd
+  actions.alignment = .center
 
   if let secondaryLabel, let onSecondary {
-    row.addArrangedSubview(editorHeaderAction(label: secondaryLabel, color: DesignTokens.textSecondary, action: onSecondary))
+    let reset = UIButton(type: .system)
+    reset.setTitle(secondaryLabel, for: .normal)
+    reset.setTitleColor(DesignTokens.textSecondary, for: .normal)
+    reset.titleLabel?.font = .systemFont(ofSize: 13, weight: .regular)
+    reset.addAction(UIAction { _ in onSecondary() }, for: .touchUpInside)
+    reset.applyPressScale()
+    actions.addArrangedSubview(reset)
   }
-  row.addArrangedSubview(editorHeaderAction(label: "Done", color: accentColor, action: onDone))
-  return row
+
+  let done = editorPanelDoneButton(accentColor: accentColor, action: onDone)
+  actions.addArrangedSubview(done)
+
+  container.addArrangedSubview(actions)
+  return container
 }
 
-/// Small text action sized for touch (44pt) without looking like a button.
-private func editorHeaderAction(label: String, color: UIColor, action: @escaping () -> Void) -> UIButton {
+private func editorPanelDoneButton(accentColor: UIColor, action: @escaping () -> Void) -> UIButton {
   let control = UIButton(type: .system)
   var config = UIButton.Configuration.plain()
-  config.title = label
-  config.baseForegroundColor = color
-  config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: DesignTokens.spaceMd, bottom: 0, trailing: DesignTokens.spaceMd)
+  config.title = "Done"
+  config.baseForegroundColor = accentColor
+  config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
   config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
     var value = incoming; value.font = .systemFont(ofSize: 13, weight: .bold); return value
   }
@@ -71,180 +87,237 @@ private func editorHeaderAction(label: String, color: UIColor, action: @escaping
 func editorToolStrip(_ content: UIStackView) -> UIScrollView {
   let scroll = UIScrollView()
   scroll.showsHorizontalScrollIndicator = false
+  scroll.alwaysBounceHorizontal = true
+  scroll.delaysContentTouches = true
+  scroll.canCancelContentTouches = true
   content.axis = .horizontal
-  content.alignment = .center
+  content.alignment = .fill
   scroll.addSubview(content)
   content.translatesAutoresizingMaskIntoConstraints = false
   NSLayoutConstraint.activate([
     content.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: DesignTokens.spaceMd),
-    content.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -DesignTokens.spaceMd),
+    scroll.contentLayoutGuide.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: DesignTokens.spaceMd),
     content.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-    content.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+    scroll.contentLayoutGuide.bottomAnchor.constraint(equalTo: content.bottomAnchor),
     content.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
   ])
   return scroll
 }
 
-/// An icon + single-line label entry in a strip, with an optional "value changed" dot.
-final class EditorStripItem {
-  let root: UIView
-  private let iconHolder: UIView
-  private let icon: UIImageView
-  private let label: UILabel
-  private let dot: UIView
+/// Interactive icon + label button in an adjustment strip, with native press feedback.
+final class EditorStripItemControl: UIButton {
+  let iconHolder = UIView()
+  let icon = UIImageView()
+  let label = UILabel()
+  let dot = UIView()
+  private var action: (() -> Void)?
 
-  init(root: UIView, iconHolder: UIView, icon: UIImageView, label: UILabel, dot: UIView) {
-    self.root = root
-    self.iconHolder = iconHolder
-    self.icon = icon
-    self.label = label
-    self.dot = dot
+  init(systemName: String, labelText: String, action: @escaping () -> Void) {
+    self.action = action
+    super.init(frame: .zero)
+    setupViews(systemName: systemName, labelText: labelText)
   }
 
-  /// Selected state is a purple icon + label over a faint purple disc — never a filled purple tile,
-  /// which at this size reads as a giant button rather than a selection.
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  private func setupViews(systemName: String, labelText: String) {
+    isAccessibilityElement = true
+    accessibilityLabel = labelText
+    accessibilityTraits = .button
+
+    icon.image = UIImage(systemName: systemName, withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular))
+    icon.tintColor = DesignTokens.textSecondary
+    icon.contentMode = .scaleAspectFit
+    icon.isUserInteractionEnabled = false
+
+    iconHolder.layer.cornerRadius = 15
+    iconHolder.isUserInteractionEnabled = false
+    iconHolder.addSubview(icon)
+    icon.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      iconHolder.widthAnchor.constraint(equalToConstant: 30),
+      iconHolder.heightAnchor.constraint(equalToConstant: 30),
+      icon.centerXAnchor.constraint(equalTo: iconHolder.centerXAnchor),
+      icon.centerYAnchor.constraint(equalTo: iconHolder.centerYAnchor),
+      icon.widthAnchor.constraint(equalToConstant: EditorPanelMetrics.iconSize),
+      icon.heightAnchor.constraint(equalToConstant: EditorPanelMetrics.iconSize),
+    ])
+
+    label.text = labelText
+    label.font = .systemFont(ofSize: 11, weight: .medium)
+    label.textColor = DesignTokens.textSecondary
+    label.textAlignment = .center
+    label.numberOfLines = 1
+    label.adjustsFontSizeToFitWidth = true
+    label.minimumScaleFactor = 0.85
+    label.isUserInteractionEnabled = false
+
+    dot.layer.cornerRadius = 2
+    dot.isHidden = true
+    dot.isUserInteractionEnabled = false
+    dot.widthAnchor.constraint(equalToConstant: 4).isActive = true
+    dot.heightAnchor.constraint(equalToConstant: 4).isActive = true
+
+    let column = UIStackView(arrangedSubviews: [iconHolder, label, dot])
+    column.axis = .vertical
+    column.alignment = .center
+    column.spacing = DesignTokens.spaceXs
+    column.isUserInteractionEnabled = false
+
+    addSubview(column)
+    column.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      widthAnchor.constraint(equalToConstant: EditorPanelMetrics.stripItemWidth),
+      column.centerXAnchor.constraint(equalTo: centerXAnchor),
+      column.centerYAnchor.constraint(equalTo: centerYAnchor),
+      column.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor),
+      column.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+    ])
+
+    addAction(UIAction { [weak self] _ in self?.action?() }, for: .touchUpInside)
+    applyPressScale()
+  }
+
+  override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+    return bounds.insetBy(dx: -8, dy: -8).contains(point)
+  }
+
   func setSelected(_ selected: Bool, accentColor: UIColor) {
     icon.tintColor = selected ? accentColor : DesignTokens.textSecondary
     label.textColor = selected ? accentColor : DesignTokens.textSecondary
     iconHolder.backgroundColor = selected ? accentColor.withAlphaComponent(0.18) : .clear
+    accessibilityTraits = selected ? [.button, .selected] : .button
   }
 
-  /// Tiny dot marking an adjustment that is no longer at its default value.
   func setModified(_ modified: Bool, accentColor: UIColor) {
     dot.isHidden = !modified
     dot.backgroundColor = accentColor
   }
 }
 
-func editorStripItem(systemName: String, labelText: String, action: @escaping () -> Void) -> EditorStripItem {
-  let icon = UIImageView(image: UIImage(systemName: systemName, withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)))
-  icon.tintColor = DesignTokens.textSecondary
-  icon.contentMode = .scaleAspectFit
+/// An icon + single-line label entry in a strip, with an optional "value changed" dot.
+final class EditorStripItem {
+  let control: EditorStripItemControl
+  var root: UIView { control }
 
-  let iconHolder = UIView()
-  iconHolder.layer.cornerRadius = 16
-  iconHolder.addSubview(icon)
-  icon.translatesAutoresizingMaskIntoConstraints = false
-  NSLayoutConstraint.activate([
-    iconHolder.widthAnchor.constraint(equalToConstant: 32),
-    iconHolder.heightAnchor.constraint(equalToConstant: 32),
-    icon.centerXAnchor.constraint(equalTo: iconHolder.centerXAnchor),
-    icon.centerYAnchor.constraint(equalTo: iconHolder.centerYAnchor),
-    icon.widthAnchor.constraint(equalToConstant: EditorPanelMetrics.iconSize),
-    icon.heightAnchor.constraint(equalToConstant: EditorPanelMetrics.iconSize),
-  ])
-
-  let label = UILabel()
-  label.text = labelText
-  label.font = .systemFont(ofSize: 11, weight: .medium)
-  label.textColor = DesignTokens.textSecondary
-  label.textAlignment = .center
-  // Labels like "Brightness" and "Saturation" must never wrap to a second line.
-  label.numberOfLines = 1
-  label.adjustsFontSizeToFitWidth = true
-  label.minimumScaleFactor = 0.85
-
-  let dot = UIView()
-  dot.layer.cornerRadius = 2
-  dot.isHidden = true
-  dot.widthAnchor.constraint(equalToConstant: 4).isActive = true
-  dot.heightAnchor.constraint(equalToConstant: 4).isActive = true
-
-  let column = UIStackView(arrangedSubviews: [iconHolder, label, dot])
-  column.axis = .vertical
-  column.alignment = .center
-  column.spacing = DesignTokens.spaceXs
-
-  let root = UIView()
-  root.addSubview(column)
-  column.translatesAutoresizingMaskIntoConstraints = false
-  NSLayoutConstraint.activate([
-    root.widthAnchor.constraint(equalToConstant: EditorPanelMetrics.stripItemWidth),
-    column.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-    column.centerYAnchor.constraint(equalTo: root.centerYAnchor),
-    column.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor),
-    column.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor),
-  ])
-  root.isAccessibilityElement = true
-  root.accessibilityLabel = labelText
-  root.accessibilityTraits = .button
-  root.addGestureRecognizer(ClosureTapGestureRecognizer(action: action))
-  root.applyPressScale()
-  return EditorStripItem(root: root, iconHolder: iconHolder, icon: icon, label: label, dot: dot)
-}
-
-/// Filter thumbnail: a preview of the current photo, outlined in purple when selected.
-/// A thin outline rather than a filled container, so the photo stays readable.
-final class EditorFilterThumbnail {
-  let root: UIView
-  let image: UIImageView
-  private let frame: UIView
-  private let label: UILabel
-
-  init(root: UIView, image: UIImageView, frame: UIView, label: UILabel) {
-    self.root = root
-    self.image = image
-    self.frame = frame
-    self.label = label
+  init(control: EditorStripItemControl) {
+    self.control = control
   }
 
   func setSelected(_ selected: Bool, accentColor: UIColor) {
-    frame.layer.borderColor = (selected ? accentColor : UIColor.clear).cgColor
-    frame.layer.borderWidth = 2
+    control.setSelected(selected, accentColor: accentColor)
+  }
+
+  func setModified(_ modified: Bool, accentColor: UIColor) {
+    control.setModified(modified, accentColor: accentColor)
+  }
+}
+
+func editorStripItem(systemName: String, labelText: String, action: @escaping () -> Void) -> EditorStripItem {
+  let control = EditorStripItemControl(systemName: systemName, labelText: labelText, action: action)
+  return EditorStripItem(control: control)
+}
+
+/// Interactive filter thumbnail button with native touch actions and selection border.
+final class EditorFilterThumbnailControl: UIButton {
+  let image = UIImageView()
+  let frameView = UIView()
+  let label = UILabel()
+  private var action: (() -> Void)?
+
+  init(labelText: String, action: @escaping () -> Void) {
+    self.action = action
+    super.init(frame: .zero)
+    setupViews(labelText: labelText)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  private func setupViews(labelText: String) {
+    isAccessibilityElement = true
+    accessibilityLabel = labelText
+    accessibilityTraits = .button
+
+    image.contentMode = .scaleAspectFill
+    image.clipsToBounds = true
+    image.layer.cornerRadius = DesignTokens.radiusMd
+    image.backgroundColor = DesignTokens.surfaceContainerHigh
+    image.isUserInteractionEnabled = false
+
+    frameView.layer.cornerRadius = DesignTokens.radiusMd + 2
+    frameView.layer.borderWidth = 2
+    frameView.layer.borderColor = UIColor.clear.cgColor
+    frameView.isUserInteractionEnabled = false
+
+    frameView.addSubview(image)
+    image.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      image.widthAnchor.constraint(equalToConstant: EditorPanelMetrics.thumbnailWidth),
+      image.heightAnchor.constraint(equalToConstant: EditorPanelMetrics.thumbnailHeight),
+      image.leadingAnchor.constraint(equalTo: frameView.leadingAnchor, constant: 2),
+      image.trailingAnchor.constraint(equalTo: frameView.trailingAnchor, constant: -2),
+      image.topAnchor.constraint(equalTo: frameView.topAnchor, constant: 2),
+      image.bottomAnchor.constraint(equalTo: frameView.bottomAnchor, constant: -2),
+    ])
+
+    label.text = labelText
+    label.font = .systemFont(ofSize: 11, weight: .medium)
+    label.textColor = DesignTokens.textSecondary
+    label.textAlignment = .center
+    label.numberOfLines = 1
+    label.adjustsFontSizeToFitWidth = true
+    label.minimumScaleFactor = 0.8
+    label.isUserInteractionEnabled = false
+
+    let column = UIStackView(arrangedSubviews: [frameView, label])
+    column.axis = .vertical
+    column.alignment = .center
+    column.spacing = DesignTokens.spaceXs
+    column.isUserInteractionEnabled = false
+
+    addSubview(column)
+    column.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      widthAnchor.constraint(equalToConstant: EditorPanelMetrics.thumbnailWidth + 12),
+      column.centerXAnchor.constraint(equalTo: centerXAnchor),
+      column.centerYAnchor.constraint(equalTo: centerYAnchor),
+      label.widthAnchor.constraint(equalTo: widthAnchor),
+    ])
+
+    addAction(UIAction { [weak self] _ in self?.action?() }, for: .touchUpInside)
+    applyPressScale()
+  }
+
+  override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+    return bounds.insetBy(dx: -8, dy: -8).contains(point)
+  }
+
+  func setSelected(_ selected: Bool, accentColor: UIColor) {
+    frameView.layer.borderColor = (selected ? accentColor : UIColor.clear).cgColor
+    frameView.layer.borderWidth = 2
     label.textColor = selected ? accentColor : DesignTokens.textSecondary
+    accessibilityTraits = selected ? [.button, .selected] : .button
+  }
+}
+
+/// Filter thumbnail: a preview of the current photo, outlined in purple when selected.
+final class EditorFilterThumbnail {
+  let control: EditorFilterThumbnailControl
+  var root: UIView { control }
+  var image: UIImageView { control.image }
+
+  init(control: EditorFilterThumbnailControl) {
+    self.control = control
+  }
+
+  func setSelected(_ selected: Bool, accentColor: UIColor) {
+    control.setSelected(selected, accentColor: accentColor)
   }
 }
 
 func editorFilterThumbnail(labelText: String, action: @escaping () -> Void) -> EditorFilterThumbnail {
-  let image = UIImageView()
-  image.contentMode = .scaleAspectFill
-  image.clipsToBounds = true
-  image.layer.cornerRadius = DesignTokens.radiusMd
-  image.backgroundColor = DesignTokens.surfaceContainerHigh
-
-  // The outline lives on a frame *around* the image so the stroke never crops the preview.
-  let frame = UIView()
-  frame.layer.cornerRadius = DesignTokens.radiusMd + 2
-  frame.addSubview(image)
-  image.translatesAutoresizingMaskIntoConstraints = false
-  NSLayoutConstraint.activate([
-    image.widthAnchor.constraint(equalToConstant: EditorPanelMetrics.thumbnailWidth),
-    image.heightAnchor.constraint(equalToConstant: EditorPanelMetrics.thumbnailHeight),
-    image.leadingAnchor.constraint(equalTo: frame.leadingAnchor, constant: 2),
-    image.trailingAnchor.constraint(equalTo: frame.trailingAnchor, constant: -2),
-    image.topAnchor.constraint(equalTo: frame.topAnchor, constant: 2),
-    image.bottomAnchor.constraint(equalTo: frame.bottomAnchor, constant: -2),
-  ])
-
-  let label = UILabel()
-  label.text = labelText
-  label.font = .systemFont(ofSize: 11, weight: .medium)
-  label.textColor = DesignTokens.textSecondary
-  label.textAlignment = .center
-  label.numberOfLines = 1
-  label.adjustsFontSizeToFitWidth = true
-  label.minimumScaleFactor = 0.8
-
-  let column = UIStackView(arrangedSubviews: [frame, label])
-  column.axis = .vertical
-  column.alignment = .center
-  column.spacing = DesignTokens.spaceXs
-
-  let root = UIView()
-  root.addSubview(column)
-  column.translatesAutoresizingMaskIntoConstraints = false
-  NSLayoutConstraint.activate([
-    root.widthAnchor.constraint(equalToConstant: EditorPanelMetrics.thumbnailWidth + 12),
-    column.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-    column.centerYAnchor.constraint(equalTo: root.centerYAnchor),
-    label.widthAnchor.constraint(equalTo: root.widthAnchor),
-  ])
-  root.isAccessibilityElement = true
-  root.accessibilityLabel = labelText
-  root.accessibilityTraits = .button
-  root.addGestureRecognizer(ClosureTapGestureRecognizer(action: action))
-  root.applyPressScale()
-  return EditorFilterThumbnail(root: root, image: image, frame: frame, label: label)
+  let control = EditorFilterThumbnailControl(labelText: labelText, action: action)
+  return EditorFilterThumbnail(control: control)
 }
 
 /// The editor's one slider: a `Label ......... value` line above a thin track, so a panel never

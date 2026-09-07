@@ -20,14 +20,14 @@ final class FilterThumbnailLoader {
       deliver(cached)
       return
     }
-    // Scale once and reuse for every preset rather than per thumbnail.
-    let square = squareSource(from: source, size: size)
     queue.async { [weak self] in
+      guard let self else { return }
+      let square = self.squareSource(from: source, size: size)
       let rendered = PhotoAdjustmentRenderer.apply(
         square,
         adjustments: PhotoAdjustments(filterPreset: presetID, filterStrength: 100)
       )
-      self?.cache.setObject(rendered, forKey: presetID as NSString)
+      self.cache.setObject(rendered, forKey: presetID as NSString)
       DispatchQueue.main.async { deliver(rendered) }
     }
   }

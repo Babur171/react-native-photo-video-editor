@@ -24,19 +24,33 @@ final class VideoEditSession {
   /// Fires once the source is probed and the initial single-clip timeline is ready.
   var onClipsReady: (() -> Void)?
 
+  private(set) var naturalSize: CGSize = .zero
+  private var cachedAsset: AVURLAsset?
   private var statusObservation: NSKeyValueObservation?
+  private let sourceUri: String
 
   init(sourceUri: String) {
-    let url = URL(fileURLWithPath: SourceResolver.resolvePath(sourceUri: sourceUri, tempPrefix: "pve_video_preview") ?? sourceUri)
+    self.sourceUri = sourceUri
+    let resolvedPath = SourceResolver.resolvePath(sourceUri: sourceUri, tempPrefix: "pve_video_preview")
+    let url = resolvedPath.map { URL(fileURLWithPath: $0) }
+      ?? (URL(string: sourceUri)?.scheme != nil ? URL(string: sourceUri)! : URL(fileURLWithPath: sourceUri))
     let asset = AVURLAsset(url: url)
+    cachedAsset = asset
     let probeItem = AVPlayerItem(asset: asset)
-    statusObservation = probeItem.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
-      guard let self, observedItem.status == .readyToPlay, self.clips.isEmpty else { return }
-      let durationSeconds = CMTimeGetSeconds(asset.duration)
-      guard durationSeconds.isFinite, durationSeconds > 0 else { return }
-      self.clips = [VideoClip(sourceUri: sourceUri, originalDurationMs: Int64(durationSeconds * 1000))]
-      self.rebuildPlayerComposition()
-      self.onClipsReady?()
+    statusObservation = probeItem.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
+      guard let self, observedItem.status == .readyToPlay else { return }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.clips.isEmpty else { return }
+        if let track = asset.tracks(withMediaType: .video).first {
+          let size = track.naturalSize.applying(track.preferredTransform)
+          self.naturalSize = CGSize(width: max(1, abs(size.width)), height: max(1, abs(size.height)))
+        }
+        let durationSeconds = CMTimeGetSeconds(asset.duration)
+        guard durationSeconds.isFinite, durationSeconds > 0 else { return }
+        self.clips = [VideoClip(sourceUri: sourceUri, originalDurationMs: Int64(durationSeconds * 1000))]
+        self.rebuildPlayerComposition()
+        self.onClipsReady?()
+      }
     }
     player.replaceCurrentItem(with: probeItem)
   }
@@ -59,8 +73,13 @@ final class VideoEditSession {
 
   /// The `AVURLAsset` for one clip's own source file (all clips share one source this milestone).
   func asset(for clip: VideoClip) -> AVURLAsset {
-    let url = URL(fileURLWithPath: SourceResolver.resolvePath(sourceUri: clip.sourceUri, tempPrefix: "pve_video_preview") ?? clip.sourceUri)
-    return AVURLAsset(url: url)
+    if let cached = cachedAsset, clip.sourceUri == sourceUri { return cached }
+    let resolvedPath = SourceResolver.resolvePath(sourceUri: clip.sourceUri, tempPrefix: "pve_video_preview")
+    let url = resolvedPath.map { URL(fileURLWithPath: $0) }
+      ?? (URL(string: clip.sourceUri)?.scheme != nil ? URL(string: clip.sourceUri)! : URL(fileURLWithPath: clip.sourceUri))
+    let asset = AVURLAsset(url: url)
+    if clip.sourceUri == sourceUri { cachedAsset = asset }
+    return asset
   }
 
   private func rebuildPlayerComposition() {
