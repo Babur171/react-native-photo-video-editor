@@ -90,6 +90,7 @@ final class PhotoVideoEditorViewController: UIViewController {
   private var videoNaturalSize: CGSize?
   private var videoLayerOverlay: LayerOverlayView?
   private var videoLayerToolBar: UIView?
+  private var videoToolBarWrapper: UIView?
   private var videoLayerPropertySlider: UISlider?
   private var selectedVideoLayerID: String?
   private var activeVideoLayerPropertyKey = ""
@@ -1157,7 +1158,13 @@ final class PhotoVideoEditorViewController: UIViewController {
   private func refreshContextSelection(_ buttons: [String: UIButton], active: String) {
     buttons.forEach { key, control in
       let selected = key == active
-      control.configuration?.baseForegroundColor = key == "delete" ? .systemRed : (selected ? (color("primaryColor") ?? DesignTokens.primaryContainer) : DesignTokens.outline)
+      if key == "delete" {
+        control.configuration?.baseForegroundColor = .systemRed
+      } else if key == "done" {
+        control.configuration?.baseForegroundColor = color("primaryColor") ?? DesignTokens.primaryContainer
+      } else {
+        control.configuration?.baseForegroundColor = selected ? (color("primaryColor") ?? DesignTokens.primaryContainer) : DesignTokens.outline
+      }
       control.backgroundColor = selected ? DesignTokens.surfaceContainerHigh : .clear
       control.layer.cornerRadius = 12
       control.accessibilityTraits = selected ? [.button, .selected] : .button
@@ -1830,6 +1837,7 @@ final class PhotoVideoEditorViewController: UIViewController {
 
     // Transparent holder so the safe-area inset lands on empty space rather than stretching the pill.
     let toolbarWrapper = UIView()
+    videoToolBarWrapper = toolbarWrapper
     toolbarWrapper.addSubview(toolbar)
     toolbar.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
@@ -1839,9 +1847,9 @@ final class PhotoVideoEditorViewController: UIViewController {
       toolbar.bottomAnchor.constraint(equalTo: toolbarWrapper.bottomAnchor, constant: -DesignTokens.spaceSm),
     ])
 
-    let trimEnabled = features["trim"] as? Bool != false
-    trim.isHidden = !trimEnabled
-    let root = UIStackView(arrangedSubviews: [header, previewWrapper, trim, cropPanel, aspectBar, layerSlider, palette, layerBar, toolbarWrapper])
+    // Single-video editor: keep the internal range initialized for export,
+    // but do not show the trim/clip timeline UI (matches Android).
+    let root = UIStackView(arrangedSubviews: [header, previewWrapper, cropPanel, aspectBar, layerSlider, palette, layerBar, toolbarWrapper])
     root.axis = .vertical
     root.spacing = DesignTokens.spaceSm
     root.translatesAutoresizingMaskIntoConstraints = false
@@ -1852,8 +1860,9 @@ final class PhotoVideoEditorViewController: UIViewController {
       root.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
       root.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
       header.heightAnchor.constraint(equalToConstant: 60),
-      trim.heightAnchor.constraint(equalToConstant: 48),
       aspectBar.heightAnchor.constraint(equalToConstant: 56),
+      layerSlider.heightAnchor.constraint(equalToConstant: 64),
+      palette.heightAnchor.constraint(equalToConstant: 48),
       layerBar.heightAnchor.constraint(equalToConstant: 68),
       toolbar.heightAnchor.constraint(equalToConstant: 52),
     ])
@@ -2060,8 +2069,9 @@ final class PhotoVideoEditorViewController: UIViewController {
     if visible { setVideoControlsVisible(true) }
     videoLayerToolBar?.isHidden = !visible
     videoToolBar?.isHidden = visible
+    videoToolBarWrapper?.isHidden = visible
     let isText = currentSelectedVideoLayer(session: session)?.type == .text
-    videoLayerPropertyButtons["scale"]?.isHidden = isText || currentSelectedVideoLayer(session: session)?.type == .sticker
+    videoLayerPropertyButtons["scale"]?.isHidden = true
     ["edit", "color", "fontSize"].forEach { videoLayerPropertyButtons[$0]?.isHidden = !isText }
     if !isText && ["color", "fontSize"].contains(activeVideoLayerPropertyKey) { activeVideoLayerPropertyKey = "" }
     videoLayerPropertySlider?.isHidden = !visible || !["scale", "rotation", "opacity", "fontSize"].contains(activeVideoLayerPropertyKey)
@@ -2092,6 +2102,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     slider.minimumValue = Float(min)
     slider.maximumValue = Float(max)
     slider.value = Float(value)
+    slider.setNeedsDisplay()
   }
 
   @objc private func videoLayerPropertyChanged(_ slider: UISlider) {
@@ -2118,21 +2129,78 @@ final class PhotoVideoEditorViewController: UIViewController {
   }
 
   private func makeVideoLayerToolBar(session: VideoEditSession, textColor: UIColor, primaryColor: UIColor, toolbarColor: UIColor) -> UIView {
-    makeContextToolbar(video: true, toolbarColor: toolbarColor) { [weak self] key in
-      guard let self, let layer = self.currentSelectedVideoLayer(session: session) else { return }
-      switch key {
-      case "edit": self.showVideoTextInputDialog(session: session, editingLayer: layer)
-      case "done": self.selectVideoLayer(nil, session: session)
-      case "delete":
-        session.layerStack.commit { $0.filter { $0.id != layer.id } }; self.selectVideoLayer(nil, session: session); self.onVideoLayerStackChanged()
-      case "duplicate":
-        let copy = layer.duplicated()
-        session.layerStack.commit { $0 + [copy] }; self.selectVideoLayer(copy.id, session: session); self.onVideoLayerStackChanged()
-      default:
-        self.activeVideoLayerPropertyKey = self.activeVideoLayerPropertyKey == key ? "" : key
-        self.setVideoLayerToolBarVisible(true, session: session)
+    let bar = UIStackView()
+    bar.axis = .horizontal
+    bar.alignment = .fill
+    bar.distribution = .fillEqually
+    bar.backgroundColor = toolbarColor
+    bar.isLayoutMarginsRelativeArrangement = true
+    bar.layoutMargins = UIEdgeInsets(top: 0, left: 4, bottom: 0, right: 4)
+
+    let actions: [(String, String, String)] = [
+      ("edit", "Edit", "pencil"),
+      ("color", "Color", "paintpalette"),
+      ("fontSize", "Size", "textformat.size"),
+      ("rotation", "Rotate", "arrow.clockwise"),
+      ("opacity", "Opacity", "circle.lefthalf.filled"),
+      ("duplicate", "Copy", "square.on.square"),
+      ("delete", "Delete", "trash"),
+      ("done", "Done", "checkmark"),
+    ]
+
+    for (key, label, symbol) in actions {
+      let control = makeVideoToolButton(label, symbol: symbol) { [weak self] in
+        guard let self, let layer = self.currentSelectedVideoLayer(session: session) else { return }
+        switch key {
+        case "edit":
+          self.showVideoTextInputDialog(session: session, editingLayer: layer)
+        case "done":
+          self.selectVideoLayer(nil, session: session)
+        case "delete":
+          session.layerStack.commit { $0.filter { $0.id != layer.id } }
+          self.selectVideoLayer(nil, session: session)
+          self.onVideoLayerStackChanged()
+        case "duplicate":
+          let copy = layer.duplicated()
+          session.layerStack.commit { $0 + [copy] }
+          self.selectVideoLayer(copy.id, session: session)
+          self.onVideoLayerStackChanged()
+        default:
+          self.activeVideoLayerPropertyKey = self.activeVideoLayerPropertyKey == key ? "" : key
+          self.setVideoLayerToolBarVisible(true, session: session)
+        }
       }
+      if key == "done" {
+        control.configuration?.baseForegroundColor = primaryColor
+      } else if key == "delete" {
+        control.configuration?.baseForegroundColor = .systemRed
+      }
+      videoLayerPropertyButtons[key] = control
+      bar.addArrangedSubview(control)
     }
+    return bar
+  }
+
+  private func makeVideoToolButton(_ label: String, symbol: String, action: @escaping () -> Void) -> UIButton {
+    let control = UIButton(type: .system)
+    var config = UIButton.Configuration.plain()
+    config.title = label
+    config.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular))
+    config.imagePlacement = .top
+    config.imagePadding = 3
+    config.baseForegroundColor = DesignTokens.outline
+    config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+      var value = incoming
+      value.font = .systemFont(ofSize: 10, weight: .medium)
+      return value
+    }
+    config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 1, bottom: 6, trailing: 1)
+    control.configuration = config
+    control.accessibilityLabel = label
+    control.heightAnchor.constraint(equalToConstant: 68).isActive = true
+    control.addAction(UIAction { _ in action() }, for: .touchUpInside)
+    control.applyPressScale()
+    return control
   }
 
   private func showVideoTextInputDialog(session: VideoEditSession, editingLayer: PhotoLayer? = nil) {
@@ -2164,49 +2232,27 @@ final class PhotoVideoEditorViewController: UIViewController {
   /// `toolButton` — that rail stacks a symbol above a label (72pt of chrome), far more than two
   /// actions warrant. `textformat` renders as "Aa", which reads as typography where a lone "T" does not.
   private func makeVideoToolBar(session: VideoEditSession, playerController: AVPlayerViewController) -> UIView {
+    let dock = UIStackView()
+    dock.axis = .horizontal
+    dock.distribution = .fillEqually
+    dock.alignment = .fill
+    dock.backgroundColor = DesignTokens.surfaceContainer
+    dock.layer.cornerRadius = 18
+    dock.clipsToBounds = true
+
     let tools: [(String, String, String)] = [
-      ("trim", "Trim", "arrow.left.and.right"),
-      ("crop", "Crop", "crop"),
-      ("rotate", "Rotate", "rotate.right"),
-      ("speed", "Speed", "gauge.with.dots.needle.50percent"),
       ("text", "Text", "textformat"),
       ("stickers", "Stickers", "face.smiling"),
-      ("overlay", "Overlay", "plus.rectangle.on.rectangle"),
-      ("cover", "Cover", "photo"),
     ]
-    let scroll = UIScrollView()
-    scroll.backgroundColor = DesignTokens.surfaceContainer
-    scroll.layer.cornerRadius = 18
-    scroll.clipsToBounds = true
-    scroll.showsHorizontalScrollIndicator = false
-
-    let stack = UIStackView()
-    stack.axis = .horizontal
-    stack.spacing = DesignTokens.spaceXs
-
-    let itemWidth = Swift.min(Swift.max(UIScreen.main.bounds.width / 4.5, 76), 96)
     tools.filter { key, _, _ in
-      if key == "overlay" {
-        return (features["overlay"] as? Bool ?? features["overlays"] as? Bool) != false
-      }
-      return features[key] as? Bool != false
+      features[key] as? Bool != false
     }.forEach { key, label, symbol in
       let control = makeVideoDockAction(label: label, symbol: symbol) { [weak self, weak playerController] in
         self?.onVideoToolTapped(key, session: session, playerView: playerController?.view)
       }
-      control.widthAnchor.constraint(equalToConstant: itemWidth).isActive = true
-      stack.addArrangedSubview(control)
+      dock.addArrangedSubview(control)
     }
-    scroll.addSubview(stack)
-    stack.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
-      stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
-      stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-      stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-      stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
-    ])
-    return scroll
+    return dock
   }
 
   /// One dock action: symbol + label on a single row, purple pill while pressed.

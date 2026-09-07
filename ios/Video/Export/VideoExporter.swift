@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import QuartzCore
 import UIKit
 
@@ -56,13 +57,17 @@ final class VideoExporter {
 
     var sourceVideoTrack: AVAssetTrack?
     var cursor = CMTime.zero
+    var hasAudio = false
     for clip in clips {
       let clipAsset = assetProvider(clip)
       guard let clipVideoTrack = clipAsset.tracks(withMediaType: .video).first else {
         onError(VideoExportError(code: "E_SOURCE_UNREADABLE", message: "A clip's source video could not be decoded."))
         return
       }
-      if sourceVideoTrack == nil { sourceVideoTrack = clipVideoTrack }
+      if sourceVideoTrack == nil {
+        sourceVideoTrack = clipVideoTrack
+        compositionVideoTrack.preferredTransform = clipVideoTrack.preferredTransform
+      }
       let range = CMTimeRange(
         start: CMTime(value: clip.trimStartMs, timescale: 1000),
         end: CMTime(value: clip.effectiveTrimEndMs(), timescale: 1000)
@@ -74,9 +79,14 @@ final class VideoExporter {
         return
       }
       if let compositionAudioTrack, let clipAudioTrack = clipAsset.tracks(withMediaType: .audio).first {
-        try? compositionAudioTrack.insertTimeRange(range, of: clipAudioTrack, at: cursor)
+        if (try? compositionAudioTrack.insertTimeRange(range, of: clipAudioTrack, at: cursor)) != nil {
+          hasAudio = true
+        }
       }
       cursor = CMTimeAdd(cursor, range.duration)
+    }
+    if !hasAudio, let compositionAudioTrack {
+      composition.removeTrack(compositionAudioTrack)
     }
     let timeRange = CMTimeRange(start: .zero, duration: cursor)
     let durationMs = clips.reduce(Int64(0)) { $0 + $1.trimmedDurationMs() }
@@ -133,27 +143,27 @@ final class VideoExporter {
 
     let cropPlan = VideoCropGeometry.plan(size:CGSize(width:renderWidth,height:renderHeight),state:state.crop,includeCrop:true)
     transform = transform.concatenating(cropPlan.transform)
-    renderWidth = cropPlan.size.width; renderHeight = cropPlan.size.height
+    renderWidth = max(2, floor(cropPlan.size.width / 2) * 2)
+    renderHeight = max(2, floor(cropPlan.size.height / 2) * 2)
 
-    let videoComposition = AVMutableVideoComposition()
-    videoComposition.renderSize = CGSize(width: renderWidth, height: renderHeight)
-    videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
+    let renderSize = CGSize(width: renderWidth, height: renderHeight)
+    let visibleLayers = layers.filter(\.visible)
+    let videoComposition: AVVideoComposition
 
-    let instruction = AVMutableVideoCompositionInstruction()
-    instruction.timeRange = CMTimeRange(start: .zero, duration: timeRange.duration)
-    let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
-    layerInstruction.setTransform(transform, at: .zero)
-    instruction.layerInstructions = [layerInstruction]
-    videoComposition.instructions = [instruction]
+    if visibleLayers.isEmpty {
+      let mutableComposition = AVMutableVideoComposition()
+      mutableComposition.renderSize = renderSize
+      mutableComposition.frameDuration = CMTime(value: 1, timescale: 30)
 
-    if !layers.isEmpty {
-      let renderSize = CGSize(width: renderWidth, height: renderHeight)
+      let instruction = AVMutableVideoCompositionInstruction()
+      instruction.timeRange = CMTimeRange(start: .zero, duration: timeRange.duration)
+      let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
+      layerInstruction.setTransform(transform, at: .zero)
+      instruction.layerInstructions = [layerInstruction]
+      mutableComposition.instructions = [instruction]
+      videoComposition = mutableComposition
+    } else {
       let longestEdge = max(renderSize.width, renderSize.height)
-      // Geometry is independent of this cap: each overlay surface below is a full-`renderSize`
-      // CALayer with `contentsGravity = .resizeAspect`, so a smaller (same-aspect) image is scaled
-      // back up to cover the whole frame. The cap only trades sharpness for peak memory. (Android's
-      // Media3 path has no such scale-to-fit — it composites overlay textures 1:1 in pixels — which
-      // is why `VideoExporter.kt` has to restore the same invariant explicitly via OverlaySettings.)
       let overlayScale = min(1, 2560 / max(longestEdge, 1))
       let overlayRenderSize = CGSize(
         width: max(2, floor(renderSize.width * overlayScale)),
@@ -161,40 +171,100 @@ final class VideoExporter {
       )
       let renderer = PhotoEditSession.pixelRenderer(size: overlayRenderSize)
       let transparentBase = renderer.image { _ in }
-      let videoLayer = CALayer()
-      videoLayer.frame = CGRect(origin: .zero, size: renderSize)
-      let parentLayer = CALayer()
-      parentLayer.frame = videoLayer.frame
-      parentLayer.addSublayer(videoLayer)
-      let durationSeconds = max(CMTimeGetSeconds(timeRange.duration), 0.001)
-      let visibleLayers = layers.filter(\.visible)
-      // Merge only adjacent layers with identical timing. This collapses the
-      // common full-duration stack to one bitmap without changing z-order.
-      var timingGroups: [(key: String, layers: [PhotoLayer])] = []
-      for layer in visibleLayers {
-        let key = "\(max(0, layer.startMs)):\(layer.effectiveEndMs(durationMs: durationMs))"
-        if timingGroups.last?.key == key {
-          timingGroups[timingGroups.count - 1].layers.append(layer)
-        } else {
-          timingGroups.append((key, [layer]))
+
+      let overlayTransform = CGAffineTransform(
+        scaleX: renderSize.width / overlayRenderSize.width,
+        y: renderSize.height / overlayRenderSize.height
+      )
+
+      let lock = NSLock()
+      var overlayCache: [String: CIImage] = [:]
+
+      let mutableComposition = AVMutableVideoComposition(asset: composition) { request in
+        let timeMs = Int64(CMTimeGetSeconds(request.compositionTime) * 1000)
+        var source = request.sourceImage
+
+        if source.extent.origin != .zero {
+          source = source.transformed(by: CGAffineTransform(translationX: -source.extent.origin.x, y: -source.extent.origin.y))
         }
+
+        if normalizedRotation != 0 {
+          let radians = CGFloat(normalizedRotation) * .pi / 180
+          source = source.transformed(by: CGAffineTransform(rotationAngle: radians))
+          source = source.transformed(by: CGAffineTransform(translationX: -source.extent.origin.x, y: -source.extent.origin.y))
+        }
+
+        if let targetRatio = state.aspectRatio, targetRatio > 0 {
+          let currentRatio = source.extent.width / source.extent.height
+          if currentRatio > targetRatio {
+            let croppedWidth = source.extent.height * targetRatio
+            let cropRect = CGRect(
+              x: source.extent.origin.x + (source.extent.width - croppedWidth) / 2,
+              y: source.extent.origin.y,
+              width: croppedWidth,
+              height: source.extent.height
+            )
+            source = source.cropped(to: cropRect).transformed(by: CGAffineTransform(translationX: -cropRect.origin.x, y: -cropRect.origin.y))
+          } else if currentRatio < targetRatio {
+            let croppedHeight = source.extent.width / targetRatio
+            let cropRect = CGRect(
+              x: source.extent.origin.x,
+              y: source.extent.origin.y + (source.extent.height - croppedHeight) / 2,
+              width: source.extent.width,
+              height: croppedHeight
+            )
+            source = source.cropped(to: cropRect).transformed(by: CGAffineTransform(translationX: -cropRect.origin.x, y: -cropRect.origin.y))
+          }
+        }
+
+        if state.crop.rotationDegrees != 0 || state.crop.straightenDegrees != 0 || state.crop.cropLeft > 0 || state.crop.cropTop > 0 || state.crop.cropRight < 1 || state.crop.cropBottom < 1 {
+          let cropPlan = VideoCropGeometry.plan(size: CGSize(width: source.extent.width, height: source.extent.height), state: state.crop, includeCrop: true)
+          let cropRect = CGRect(
+            x: source.extent.origin.x + (source.extent.width - cropPlan.size.width) / 2,
+            y: source.extent.origin.y + (source.extent.height - cropPlan.size.height) / 2,
+            width: cropPlan.size.width,
+            height: cropPlan.size.height
+          )
+          source = source.cropped(to: cropRect).transformed(by: CGAffineTransform(translationX: -cropRect.origin.x, y: -cropRect.origin.y))
+        }
+
+        let activeLayers = visibleLayers.filter { $0.isActive(atMs: timeMs, durationMs: durationMs) }
+        if !activeLayers.isEmpty {
+          let key = activeLayers.map { "\($0.id)" }.joined(separator: ",")
+          lock.lock()
+          let cached = overlayCache[key]
+          lock.unlock()
+
+          let overlayCI: CIImage?
+          if let cached {
+            overlayCI = cached
+          } else {
+            let image = PhotoLayerRenderer.render(transparentBase, layers: activeLayers) { uri in
+              SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_video_layer_export").flatMap { UIImage(contentsOfFile: $0) }
+            }
+            if let cgImage = image.cgImage {
+              let ci = CIImage(cgImage: cgImage).transformed(by: overlayTransform)
+              lock.lock()
+              overlayCache[key] = ci
+              lock.unlock()
+              overlayCI = ci
+            } else {
+              overlayCI = nil
+            }
+          }
+
+          if let overlayCI {
+            source = overlayCI.composited(over: source)
+          }
+        }
+
+        let output = source.cropped(to: CGRect(origin: .zero, size: renderSize))
+        request.finish(with: output, context: nil)
       }
-      for entry in timingGroups {
-        let group = entry.layers
-        guard let representative = group.first else { continue }
-        autoreleasepool {
-        let image = PhotoLayerRenderer.render(transparentBase, layers: group) { uri in
-          SourceResolver.resolvePath(sourceUri: uri, tempPrefix: "pve_video_layer_export").flatMap { UIImage(contentsOfFile: $0) }
-        }
-        let surface = CALayer()
-        surface.frame = parentLayer.bounds
-        surface.contents = image.cgImage
-        surface.contentsGravity = .resizeAspect
-        applyVisibilityTiming(to: surface, layer: representative, durationMs: durationMs, durationSeconds: durationSeconds)
-        parentLayer.addSublayer(surface)
-        }
-      }
-      videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parentLayer)
+
+      mutableComposition.renderSize = renderSize
+      mutableComposition.frameDuration = CMTime(value: 1, timescale: 30)
+      videoComposition = mutableComposition
     }
 
     let outputDir = FileManager.default.temporaryDirectory.appendingPathComponent("photovideoeditor", isDirectory: true)
@@ -203,6 +273,7 @@ final class VideoExporter {
     outputURL = output
 
     guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+      cleanup()
       onError(VideoExportError(code: "E_INTERNAL", message: "Unable to create the export session."))
       return
     }
@@ -219,7 +290,7 @@ final class VideoExporter {
 
     session.exportAsynchronously { [weak self] in
       guard let self else { return }
-      self.progressTimer?.invalidate()
+      self.cleanup()
       switch session.status {
       case .completed:
         self.outputURL = nil
@@ -245,40 +316,14 @@ final class VideoExporter {
     }
   }
 
-  private func applyVisibilityTiming(to surface: CALayer, layer: PhotoLayer, durationMs: Int64, durationSeconds: Double) {
-    let start = min(max(layer.startMs, 0), durationMs)
-    let end = layer.effectiveEndMs(durationMs: durationMs)
-    if start == 0 && end >= durationMs {
-      surface.opacity = 1
-      return
-    }
-    let animation = CAKeyframeAnimation(keyPath: "opacity")
-    var values: [NSNumber] = []
-    var times: [NSNumber] = []
-    if start > 0 {
-      values.append(0); times.append(0)
-      values.append(1); times.append(NSNumber(value: Double(start) / Double(max(durationMs, 1))))
-    } else {
-      values.append(1); times.append(0)
-    }
-    if end < durationMs {
-      values.append(0); times.append(NSNumber(value: Double(end) / Double(max(durationMs, 1))))
-    } else {
-      values.append(1); times.append(1)
-    }
-    animation.values = values
-    animation.keyTimes = times
-    animation.calculationMode = .discrete
-    animation.beginTime = AVCoreAnimationBeginTimeAtZero
-    animation.duration = durationSeconds
-    animation.fillMode = .both
-    animation.isRemovedOnCompletion = false
-    surface.add(animation, forKey: "overlayVisibility")
+  private func cleanup() {
+    progressTimer?.invalidate()
+    progressTimer = nil
   }
 
   func cancel() {
     exportSession?.cancelExport()
-    progressTimer?.invalidate()
+    cleanup()
     if let outputURL { try? FileManager.default.removeItem(at: outputURL) }
   }
 }
