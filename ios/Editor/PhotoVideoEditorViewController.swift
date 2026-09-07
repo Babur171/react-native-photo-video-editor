@@ -20,6 +20,7 @@ final class PhotoVideoEditorViewController: UIViewController {
   private var initialStickerImages: [String: (URL, UIImage)] = [:]
   private var initialStickerLoading = false
   private let stickerAssets: [[String: Any]]
+  private let doneButtonText: String
   var completion: ((PhotoVideoEditorOutcome) -> Void)?
 
   private var photoSession: PhotoEditSession?
@@ -123,7 +124,8 @@ final class PhotoVideoEditorViewController: UIViewController {
     theme: [String: Any] = [:],
     exportOptions: [String: Any] = [:],
     stickerAssets: [[String: Any]] = [],
-    initialStickerIds: [String] = []
+    initialStickerIds: [String] = [],
+    doneButtonText: String? = nil
   ) {
     self.uri = uri
     self.mediaType = mediaType
@@ -132,6 +134,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     self.exportOptions = exportOptions
     self.stickerAssets = stickerAssets
     self.initialStickerIds = initialStickerIds
+    self.doneButtonText = doneButtonText ?? (theme["doneButtonText"] as? String) ?? (theme["exportButtonText"] as? String) ?? "Done"
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .fullScreen
   }
@@ -463,7 +466,8 @@ final class PhotoVideoEditorViewController: UIViewController {
 
     init(systemName: String, labelText: String, onTap: (() -> Void)? = nil) {
       self.onTapAction = onTap
-      self.icon = UIImageView(image: UIImage(systemName: systemName))
+      let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .regular)
+      self.icon = UIImageView(image: UIImage(systemName: systemName, withConfiguration: config))
       super.init(frame: .zero)
       setupViews(labelText: labelText)
     }
@@ -477,7 +481,7 @@ final class PhotoVideoEditorViewController: UIViewController {
 
       tile.isUserInteractionEnabled = false
       tile.backgroundColor = .clear
-      tile.layer.cornerRadius = 15
+      tile.layer.cornerRadius = 18
       tile.clipsToBounds = true
 
       icon.isUserInteractionEnabled = false
@@ -489,13 +493,13 @@ final class PhotoVideoEditorViewController: UIViewController {
       NSLayoutConstraint.activate([
         icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
         icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
-        icon.widthAnchor.constraint(equalToConstant: 18),
-        icon.heightAnchor.constraint(equalToConstant: 18),
+        icon.widthAnchor.constraint(equalToConstant: 22),
+        icon.heightAnchor.constraint(equalToConstant: 22),
       ])
 
       label.isUserInteractionEnabled = false
       label.text = labelText
-      label.font = .systemFont(ofSize: 11, weight: .medium)
+      label.font = .systemFont(ofSize: 12.5, weight: .medium)
       label.textColor = DesignTokens.textSecondary
       label.textAlignment = .center
       label.numberOfLines = 1
@@ -511,12 +515,12 @@ final class PhotoVideoEditorViewController: UIViewController {
       addSubview(contentStack)
       contentStack.translatesAutoresizingMaskIntoConstraints = false
       NSLayoutConstraint.activate([
-        tile.widthAnchor.constraint(equalToConstant: 30),
-        tile.heightAnchor.constraint(equalToConstant: 30),
+        tile.widthAnchor.constraint(equalToConstant: 36),
+        tile.heightAnchor.constraint(equalToConstant: 36),
         contentStack.centerXAnchor.constraint(equalTo: centerXAnchor),
         contentStack.centerYAnchor.constraint(equalTo: centerYAnchor),
-        label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 2),
-        label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -2),
+        label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 1),
+        label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -1),
       ])
 
       if onTapAction != nil {
@@ -595,7 +599,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     let stack = UIStackView()
     stack.axis = .horizontal
     stack.spacing = 2
-    let itemWidth: CGFloat = 58
+    let itemWidth: CGFloat = 64
     tools.filter { key, _, _ in
       if key == "overlay" {
         return (features["overlay"] as? Bool ?? features["overlays"] as? Bool) != false
@@ -2575,9 +2579,9 @@ final class PhotoVideoEditorViewController: UIViewController {
     close.clipsToBounds = true
 
     let title = UILabel()
-    title.text = mediaType == "photo" ? "Photo Editor" : "Video Editor"
+    title.text = "Editor"
     title.textColor = textColor
-    title.font = .systemFont(ofSize: 14, weight: .semibold)
+    title.font = .systemFont(ofSize: 16 , weight: .semibold)
     title.adjustsFontSizeToFitWidth = true
     title.minimumScaleFactor = 0.75
     title.textAlignment = .center
@@ -2618,8 +2622,8 @@ final class PhotoVideoEditorViewController: UIViewController {
     }
 
     let onPrimaryColor = color("onPrimaryColor") ?? DesignTokens.onPrimaryContainer
-    let export = EditorComponents.primaryButton(
-      text: "Export",
+    let done = EditorComponents.primaryButton(
+      text: doneButtonText,
       systemImage: nil,
       fillColor: primaryColor,
       textColor: onPrimaryColor
@@ -2627,7 +2631,7 @@ final class PhotoVideoEditorViewController: UIViewController {
       guard let self else { return }
       if self.mediaType == "photo" { self.showPhotoExportConfiguration() } else { self.doneEditor() }
     }
-    header.addArrangedSubview(export)
+    header.addArrangedSubview(done)
 
     title.setContentHuggingPriority(.defaultLow, for: .horizontal)
     return header

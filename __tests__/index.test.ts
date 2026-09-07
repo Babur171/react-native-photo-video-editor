@@ -53,6 +53,19 @@ test('normalizes and forwards a valid photo request', async () => {
   });
 });
 
+test('forwards custom doneButtonText prop', async () => {
+  mockNativeOpenEditor.mockResolvedValue(
+    JSON.stringify({ uri: 'file:///photo.jpg', type: 'photo', cancelled: false })
+  );
+  await openEditor({
+    source: { uri: 'file:///photo.jpg', type: 'photo' },
+    doneButtonText: 'Save',
+  });
+  expect(JSON.parse(mockNativeOpenEditor.mock.calls[0]![0])).toMatchObject({
+    doneButtonText: 'Save',
+  });
+});
+
 test('accepts a valid video request', async () => {
   mockNativeOpenEditor.mockResolvedValue(
     JSON.stringify({

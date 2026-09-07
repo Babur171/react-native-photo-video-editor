@@ -25,11 +25,17 @@ final class CropPanel: UIStackView {
       return button
     }
     let reset = UIButton(type:.system)
-    var resetStyle = UIButton.Configuration.plain(); resetStyle.title = "Reset"; resetStyle.image = UIImage(systemName:"arrow.counterclockwise")
-    resetStyle.imagePadding = 6; resetStyle.baseForegroundColor = foreground
+    var resetStyle = UIButton.Configuration.plain(); resetStyle.title = "Reset"
+    resetStyle.image = UIImage(systemName:"arrow.counterclockwise", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
+    resetStyle.imagePadding = 5; resetStyle.baseForegroundColor = foreground
+    resetStyle.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
+    resetStyle.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+      var output = incoming; output.font = .systemFont(ofSize: 12.5, weight: .medium); return output
+    }
     reset.configuration = resetStyle; reset.addAction(UIAction { _ in onReset() },for:.touchUpInside)
-    reset.widthAnchor.constraint(equalToConstant:88).isActive = true
-    let title = UILabel(); title.text = "Crop"; title.font = .systemFont(ofSize:17,weight:.semibold); title.textColor = foreground; title.textAlignment = .center
+    reset.titleLabel?.numberOfLines = 1
+    reset.widthAnchor.constraint(equalToConstant:76).isActive = true
+    let title = UILabel(); title.text = "Crop"; title.font = .systemFont(ofSize:14,weight:.semibold); title.textColor = foreground; title.textAlignment = .center
     let done = icon("checkmark",label:"Apply crop",action:onDone); done.tintColor = accent
     let header = UIStackView(arrangedSubviews:[reset,title,icon("xmark",label:"Cancel crop",action:onCancel),done]); header.axis = .horizontal
     header.heightAnchor.constraint(equalToConstant:48).isActive = true; addArrangedSubview(header)
@@ -48,6 +54,7 @@ final class CropPanel: UIStackView {
       let control = UIButton(type:.system)
       var config = UIButton.Configuration.plain(); config.title = name; config.imagePlacement = .top; config.imagePadding = 6
       config.baseForegroundColor = foreground
+      config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 2, bottom: 4, trailing: 2)
       config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { value in var output = value; output.font = .systemFont(ofSize:11); return output }
       let aspect = name == "Original" ? max(0.01,originalRatio()) : ratio ?? 1.25
       config.image = UIGraphicsImageRenderer(size:CGSize(width:30,height:30)).image { _ in
@@ -57,7 +64,7 @@ final class CropPanel: UIStackView {
       }.withRenderingMode(.alwaysTemplate)
       control.configuration = config; control.layer.cornerRadius = 12
       control.accessibilityLabel = "\(name) crop ratio"
-      control.widthAnchor.constraint(equalToConstant:64).isActive = true
+      control.widthAnchor.constraint(equalToConstant:66).isActive = true
       control.addAction(UIAction { _ in onRatio(name,name == "Original" ? originalRatio() : ratio) },for:.touchUpInside)
       control.applyPressScale(); rail.addArrangedSubview(control); presets[name] = control
     }

@@ -78,6 +78,13 @@ class PhotoVideoEditorActivity : Activity() {
   private val mediaType by lazy { intent.getStringExtra(EXTRA_TYPE).orEmpty() }
   private val request by lazy { JSONObject(intent.getStringExtra(EXTRA_REQUEST).orEmpty()) }
   private val theme by lazy { request.optJSONObject("theme") }
+  private val doneButtonText by lazy {
+    request.optString("doneButtonText").takeIf { it.isNotBlank() }
+      ?: request.optString("exportButtonText").takeIf { it.isNotBlank() }
+      ?: theme?.optString("doneButtonText")?.takeIf { it.isNotBlank() }
+      ?: theme?.optString("exportButtonText")?.takeIf { it.isNotBlank() }
+      ?: "Done"
+  }
 
   private var photoSession: PhotoEditSession? = null
   private var cropMode = false
@@ -2547,8 +2554,8 @@ class PhotoVideoEditorActivity : Activity() {
       )
 
       addView(TextView(this@PhotoVideoEditorActivity).apply {
-        text = if (mediaType == "photo") "Photo Editor" else "Video Editor"
-        textSize = 14f
+        text = "Editor"
+        textSize = 16f
         maxLines = 1
         ellipsize = android.text.TextUtils.TruncateAt.END
         gravity = Gravity.CENTER
@@ -2573,7 +2580,7 @@ class PhotoVideoEditorActivity : Activity() {
 
 
       addView(
-        editorPrimaryButton(this@PhotoVideoEditorActivity, "Export", null, primaryColor, onPrimaryColor) {
+        editorPrimaryButton(this@PhotoVideoEditorActivity, doneButtonText, null, primaryColor, onPrimaryColor) {
           if (mediaType == "photo") showPhotoExportConfiguration() else finishDone()
         },
         LinearLayout.LayoutParams(WRAP, dp(DesignTokens.touchTargetMin)).apply { marginStart = dp(DesignTokens.spaceXs) }

@@ -24,6 +24,7 @@ public class PhotoVideoEditorSwift: NSObject {
     guard !editorOpen else { reject("E_EDITOR_ALREADY_OPEN", "Another editor is already open.", nil); return }
     guard let presenter = RCTPresentedViewController() else { reject("E_EDITOR_UNAVAILABLE", "The editor requires a foreground view controller.", nil); return }
     editorOpen = true
+    let doneButtonText = payload["doneButtonText"] as? String ?? payload["exportButtonText"] as? String
     let controller = PhotoVideoEditorViewController(
       uri: uri,
       mediaType: type,
@@ -31,7 +32,8 @@ public class PhotoVideoEditorSwift: NSObject {
       theme: payload["theme"] as? [String: Any] ?? [:],
       exportOptions: payload["export"] as? [String: Any] ?? [:],
       stickerAssets: payload["stickerAssets"] as? [[String: Any]] ?? [],
-      initialStickerIds: payload["initialStickerIds"] as? [String] ?? []
+      initialStickerIds: payload["initialStickerIds"] as? [String] ?? [],
+      doneButtonText: doneButtonText
     )
     controller.completion = { [weak self, weak controller] outcome in
       guard let self else { return }

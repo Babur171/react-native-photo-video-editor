@@ -41,6 +41,8 @@ export interface EditorTheme {
   /** Toolbar color. */ toolbarColor?: string;
   /** Foreground text color. */ textColor?: string;
   /** Status bar content style. */ statusBarStyle?: 'light' | 'dark';
+  /** Custom label for the top-right completion/export button (defaults to "Done"). */ doneButtonText?: string;
+  /** Alias for doneButtonText. */ exportButtonText?: string;
 }
 /** Export preferences. The milestone-one placeholder does not export media. */
 export interface ExportOptions {
@@ -69,6 +71,8 @@ export interface EditorOptions {
   /** Enabled tools. */ features?: EditorFeatures;
   /** Native UI theme. */ theme?: EditorTheme;
   /** Export preferences. */ export?: ExportOptions;
+  /** Custom label for the top-right completion/export button (defaults to "Done"). */ doneButtonText?: string;
+  /** Alias for doneButtonText. */ exportButtonText?: string;
   /** Requests saving to the gallery. Currently ignored by the placeholder. */ saveToGallery?: boolean;
   /** Ordered, unique IDs in stickerAssets. The first starts centered; the sticker’s top-right control cycles through the rest. */ initialStickerIds?: string[];
   /** Consumer-provided stickers offered by the Stickers tool, in addition to the small built-in set and end-user uploads. */ stickerAssets?: StickerAsset[];
