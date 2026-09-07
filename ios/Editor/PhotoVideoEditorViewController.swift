@@ -1776,7 +1776,7 @@ final class PhotoVideoEditorViewController: UIViewController {
       header.heightAnchor.constraint(equalToConstant: 60),
       trim.heightAnchor.constraint(equalToConstant: 48),
       aspectBar.heightAnchor.constraint(equalToConstant: 56),
-      layerBar.heightAnchor.constraint(equalToConstant: 76),
+      layerBar.heightAnchor.constraint(equalToConstant: 68),
       toolbar.heightAnchor.constraint(equalToConstant: 52),
     ])
 
