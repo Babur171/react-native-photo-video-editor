@@ -36,8 +36,8 @@ enum PhotoExporter {
       throw PhotoExportError(code: "E_SOURCE_UNREADABLE", message: "The selected photo could not be decoded.")
     }
 
-    let maxWidth = (exportOptions?["maxWidth"] as? NSNumber)?.doubleValue.map { CGFloat($0) }
-    let maxHeight = (exportOptions?["maxHeight"] as? NSNumber)?.doubleValue.map { CGFloat($0) }
+    let maxWidth = (exportOptions?["maxWidth"] as? NSNumber).map { CGFloat($0.doubleValue) }
+    let maxHeight = (exportOptions?["maxHeight"] as? NSNumber).map { CGFloat($0.doubleValue) }
     let decodeTarget = max(maxWidth ?? defaultMaxDimension, maxHeight ?? defaultMaxDimension) * 2
 
     let thumbnailOptions: [CFString: Any] = [

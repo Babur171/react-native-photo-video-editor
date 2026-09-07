@@ -95,5 +95,5 @@ final class VideoEditSession {
 }
 
 private extension Int64 {
-  func clamped(to range: ClosedRange<Int64>) -> Int64 { min(max(self, range.lowerBound), range.upperBound) }
+  func clamped(to range: ClosedRange<Int64>) -> Int64 { Swift.min(Swift.max(self, range.lowerBound), range.upperBound) }
 }

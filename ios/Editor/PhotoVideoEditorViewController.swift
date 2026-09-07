@@ -176,7 +176,7 @@ final class PhotoVideoEditorViewController: UIViewController {
       return
     }
 
-    let imageView = ZoomableImageView()
+    let imageView = ZoomableImageView(frame: .zero)
     imageView.image = session.renderPreview() ?? baseImage
     photoImageView = imageView
     preview.addSubview(imageView)
@@ -247,9 +247,14 @@ final class PhotoVideoEditorViewController: UIViewController {
     layers.onLayerTransformChanged = { [weak self] id, x, y, scale, rotation in
       guard let self, let session = self.photoSession else { return }
       if self.dragStartSnapshot == nil { self.dragStartSnapshot = session.layerStack.layers }
-      session.layerStack.updateLive { list in list.map { $0.id == id ? {
-        var layer = $0; layer.x = x; layer.y = y; layer.scale = scale; layer.rotationDegrees = rotation; return layer
-      }() : $0 } }
+      session.layerStack.updateLive { list in
+        list.map { current in
+          guard current.id == id else { return current }
+          var layer = current
+          layer.x = x; layer.y = y; layer.scale = scale; layer.rotationDegrees = rotation
+          return layer
+        }
+      }
       layers.layers = session.layerStack.layers
       self.schedulePhotoPreviewRender()
     }
@@ -1403,9 +1408,14 @@ final class PhotoVideoEditorViewController: UIViewController {
     videoLayers.onLayerTransformChanged = { [weak self] id, x, y, scale, rotation in
       guard let self else { return }
       if self.videoDragStartSnapshot == nil { self.videoDragStartSnapshot = session.layerStack.layers }
-      session.layerStack.updateLive { list in list.map { $0.id == id ? {
-        var layer = $0; layer.x = x; layer.y = y; layer.scale = scale; layer.rotationDegrees = rotation; return layer
-      }() : $0 } }
+      session.layerStack.updateLive { list in
+        list.map { current in
+          guard current.id == id else { return current }
+          var layer = current
+          layer.x = x; layer.y = y; layer.scale = scale; layer.rotationDegrees = rotation
+          return layer
+        }
+      }
       videoLayers.layers = session.layerStack.layers
       self.refreshVideoOverlayPreview(session: session)
     }

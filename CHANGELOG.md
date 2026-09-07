@@ -5,6 +5,12 @@
 ## 0.2.1
 
 - Fix an iOS build failure in `TextEditorSheet`: its private stored property `editing` collided with `UIViewController.isEditing`, which is exported to Objective-C as `editing`, so the compiler treated it as an invalid override ("cannot override with a stored property" / "overriding property must be as accessible as its enclosing type"). The property is now `isEditingExisting`; the `editing:` initialiser label is unchanged, so call sites are unaffected.
+- Fix three more iOS build failures in `PhotoVideoEditorViewController`:
+  - `ZoomableImageView()` had no matching initialiser. The class overrides `init(frame:)`, so it does not inherit `UIView`'s no-argument initialiser; the call is now `ZoomableImageView(frame: .zero)`. This also cleared the cascading "cannot infer type of closure parameter 'bounds'" error on the `onBoundsChanged` assignment.
+  - Two layer-transform handlers used an immediately-applied closure inside a ternary (`{ var layer = $0; ... }()`). The `$0` inside bound to the inner closure's own parameter rather than the enclosing `map`'s element, making it a one-argument closure invoked with none. Both are rewritten as an explicit `map { current in ... }` with a `guard`.
+- Fix an iOS build failure in `PhotoExporter`: `(exportOptions?["maxWidth"] as? NSNumber)?.doubleValue.map { ... }` applied `map` to the non-optional `Double` inside the optional chain rather than to the optional itself. `map` now runs on the optional `NSNumber`, keeping the `CGFloat?` type that `resize(_:maxWidth:maxHeight:)` expects.
+- Fix an iOS build failure in `VideoEditSession`: inside `private extension Int64`, the bare `min`/`max` in `clamped(to:)` resolved to the static properties `Int64.min`/`Int64.max` instead of the global functions. They are now qualified as `Swift.min`/`Swift.max`.
+- Fix an iOS build failure in `PhotoVideoEditor.mm`: the TurboModule class subclassed the Swift `PhotoVideoEditorSwift`, which Objective-C cannot do — Swift emits every class into the generated header with `objc_subclassing_restricted`. The TurboModule now holds a `PhotoVideoEditorSwift` instance and forwards `openEditor`, `cancelExport` and `isAvailable` to it.
 
 ## 0.2.0
 
