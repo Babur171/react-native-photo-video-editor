@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Used only for consumer-supplied HTTPS sticker URLs. Bundled stickers remain offline. -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <application>
+    <activity
+      android:name=".editor.PhotoVideoEditorActivity"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode"
+      android:exported="false"
+      android:screenOrientation="portrait"
+      android:theme="@style/PhotoVideoEditorTheme" />
+  </application>
+</manifest>

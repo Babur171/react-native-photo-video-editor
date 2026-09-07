@@ -1,0 +1,33 @@
+{
+  "exclude": ["react-native-photo-editor-master"],
+  "compilerOptions": {
+    "rootDir": ".",
+    "paths": {
+      "react-native-photo-video-editor": ["./src/index"]
+    },
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "customConditions": [
+      "react-native-photo-video-editor-source",
+      "react-native-strict-api"
+    ],
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "jsx": "react-jsx",
+    "lib": ["ESNext"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ESNext",
+    "types": ["jest"],
+    "verbatimModuleSyntax": true
+  }
+}

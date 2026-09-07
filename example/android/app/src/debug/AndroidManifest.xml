@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools">
+  <application>
+    <!-- Test harness access only. Release keeps the library activity private. -->
+    <activity
+      android:name="com.photovideoeditor.editor.PhotoVideoEditorActivity"
+      android:exported="true"
+      tools:replace="android:exported" />
+    <activity
+      android:name="photovideoeditor.example.VideoExportVerificationActivity"
+      android:exported="true" />
+  </application>
+</manifest>
