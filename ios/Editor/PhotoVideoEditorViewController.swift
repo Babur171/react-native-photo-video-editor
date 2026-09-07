@@ -1556,7 +1556,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     let adjustments = session.adjustments
     let layers = session.layerStack.layers
     var options = exportOptions
-    if let selectedPhotoExportFormat { options["imageFormat"] = selectedPhotoExportFormat }
+    options["imageFormat"] = selectedPhotoExportFormat ?? "png"
     let sourceUri = uri
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       do {
@@ -2628,8 +2628,7 @@ final class PhotoVideoEditorViewController: UIViewController {
       fillColor: primaryColor,
       textColor: onPrimaryColor
     ) { [weak self] in
-      guard let self else { return }
-      if self.mediaType == "photo" { self.showPhotoExportConfiguration() } else { self.doneEditor() }
+      self?.doneEditor()
     }
     header.addArrangedSubview(done)
 
@@ -2716,26 +2715,6 @@ final class PhotoVideoEditorViewController: UIViewController {
     schedulePhotoPreviewRender()
   }
 
-  private func showPhotoExportConfiguration() {
-    let sheet = UIAlertController(
-      title: "Export & Share",
-      message: "Choose an output format. Quality and size limits continue to use your export settings.",
-      preferredStyle: .actionSheet
-    )
-    [("JPEG", "jpeg"), ("PNG", "png"), ("WebP", "webp")].forEach { label, format in
-      sheet.addAction(UIAlertAction(title: label, style: .default) { [weak self] _ in
-        self?.selectedPhotoExportFormat = format
-        self?.doneEditor()
-      })
-    }
-    sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-    if let popover = sheet.popoverPresentationController {
-      popover.sourceView = view
-      popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.maxY - 1, width: 1, height: 1)
-    }
-    present(sheet, animated: true)
-  }
-
   /// Coalesces slider and drag callbacks and performs rendering on a dedicated background queue
   /// so the main thread remains at 120 FPS without slider hitching or dragging lag.
   private func schedulePhotoPreviewRender() {
@@ -2796,6 +2775,7 @@ final class PhotoVideoEditorViewController: UIViewController {
 
   private func doneEditor() {
     if mediaType == "photo" {
+      selectedPhotoExportFormat = "png"
       exportPhoto()
     } else {
       exportVideo()

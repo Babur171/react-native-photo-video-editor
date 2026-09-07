@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.3
+
+- **Direct photo PNG export on iOS**: Removed the "Export & Share" action sheet confirmation dialog on iOS. Tapping the header completion button (Done / Export) now directly exports the photo as a PNG file without requiring format confirmation.
+
 ## 0.3.2
 
 - **Fix iOS video export crash**: Resolved `EXC_BREAKPOINT` / `_xpc_api_misuse` crash on iOS 26+ in `basicvideocompositor.output` by replacing `AVVideoCompositionCoreAnimationTool` with `AVVideoComposition(asset:applyingCIFiltersWithHandler:)` and Core Image compositing in `VideoExporter`.
