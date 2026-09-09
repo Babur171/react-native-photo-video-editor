@@ -1,6 +1,6 @@
 {
   "name": "react-native-photo-video-editor",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Native photo and video editor for React Native, powered by Kotlin and Swift.",
   "main": "./lib/module/index.js",
   "module": "./lib/module/index.js",

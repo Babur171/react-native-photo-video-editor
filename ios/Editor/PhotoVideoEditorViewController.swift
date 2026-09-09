@@ -1777,9 +1777,9 @@ final class PhotoVideoEditorViewController: UIViewController {
     ])
     clipStripScroll = stripScroll
 
-    session.onClipsReady = { [weak self] in
-      guard let self else { return }
-      DispatchQueue.main.async {
+    session.onClipsReady = { [weak self, weak session] in
+      DispatchQueue.main.async { [weak self, weak session] in
+        guard let self, let session else { return }
         self.selectedClipIndex = 0
         self.updateTimeLabel()
         self.bindTrimViewToSelectedClip(session: session)
@@ -1907,7 +1907,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     positionPollTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
       guard let self, let session = self.videoSession else { return }
       if !self.seekingPosition, session.durationMs > 0 {
-        let currentMs = Int64(CMTimeGetSeconds(session.player.currentTime()) * 1000)
+        let currentMs = session.currentPositionMs
         self.positionSlider?.value = Float(min(max(Double(currentMs) / Double(session.durationMs), 0), 1)) * 1000
         self.updateTimeLabel()
       }
@@ -1951,7 +1951,7 @@ final class PhotoVideoEditorViewController: UIViewController {
 
   private func updateTimeLabel() {
     guard let session = videoSession else { return }
-    let currentMs = Int64(CMTimeGetSeconds(session.player.currentTime()) * 1000)
+    let currentMs = session.currentPositionMs
     timeLabel?.text = "\(formatMs(currentMs)) / \(formatMs(session.durationMs))"
   }
 
@@ -1964,7 +1964,7 @@ final class PhotoVideoEditorViewController: UIViewController {
   /// transparent image sized to the video's own natural size. Reuses
   /// `PhotoLayerRenderer` unchanged — overlays are just `PhotoLayer`s with a time range.
   private func refreshVideoOverlayPreview(session: VideoEditSession) {
-    let positionMs = Int64(CMTimeGetSeconds(session.player.currentTime()) * 1000)
+    let positionMs = session.currentPositionMs
     let activeLayers = session.layerStack.layers.filter { $0.isActive(atMs: positionMs, durationMs: session.durationMs) }
     if let overlayView = videoOverlayImageView {
       videoLayerOverlay?.layers = activeLayers
@@ -2305,7 +2305,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     case "crop":
       setVideoCropMode(true, session: session)
     case "cover":
-      let atMs = Int64(CMTimeGetSeconds(session.player.currentTime()) * 1000)
+      let atMs = session.currentPositionMs
       session.update { $0.coverFrameMs = atMs }
       showToast("Cover frame set at \(formatMs(atMs))")
     case "rotate":
@@ -2496,7 +2496,7 @@ final class PhotoVideoEditorViewController: UIViewController {
     guard let session = videoSession, let clip = session.clips[safe: selectedClipIndex] else { return }
     let index = selectedClipIndex
     let precedingMs = session.clips.prefix(index).reduce(Int64(0)) { $0 + $1.trimmedDurationMs() }
-    let globalMs = Int64(CMTimeGetSeconds(session.player.currentTime()) * 1000)
+    let globalMs = session.currentPositionMs
     let splitWithinClipMs = min(max(globalMs - precedingMs, 0), clip.trimmedDurationMs())
     let splitSourceMs = clip.trimStartMs + splitWithinClipMs
     guard splitSourceMs > clip.trimStartMs + 50, splitSourceMs < clip.effectiveTrimEndMs() - 50 else {
@@ -2789,6 +2789,7 @@ final class PhotoVideoEditorViewController: UIViewController {
 
   deinit {
     positionPollTimer?.invalidate()
+    hideVideoControlsTimer?.invalidate()
     timelineThumbnailRequest?.cancel()
     timelineThumbnailRepository?.close()
     photoSession?.release()

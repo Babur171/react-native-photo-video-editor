@@ -28,6 +28,7 @@ final class VideoEditSession {
   private var cachedAsset: AVURLAsset?
   private var statusObservation: NSKeyValueObservation?
   private let sourceUri: String
+  private var isReleased = false
 
   init(sourceUri: String) {
     self.sourceUri = sourceUri
@@ -40,14 +41,14 @@ final class VideoEditSession {
     statusObservation = probeItem.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
       guard let self, observedItem.status == .readyToPlay else { return }
       DispatchQueue.main.async { [weak self] in
-        guard let self, self.clips.isEmpty else { return }
+        guard let self, !self.isReleased, self.clips.isEmpty else { return }
         if let track = asset.tracks(withMediaType: .video).first {
           let size = track.naturalSize.applying(track.preferredTransform)
           self.naturalSize = CGSize(width: max(1, abs(size.width)), height: max(1, abs(size.height)))
         }
         let durationSeconds = CMTimeGetSeconds(asset.duration)
         guard durationSeconds.isFinite, durationSeconds > 0 else { return }
-        self.clips = [VideoClip(sourceUri: sourceUri, originalDurationMs: Int64(durationSeconds * 1000))]
+        self.clips = [VideoClip(sourceUri: sourceUri, originalDurationMs: Self.milliseconds(for: asset.duration))]
         self.rebuildPlayerComposition()
         self.onClipsReady?()
       }
@@ -58,6 +59,15 @@ final class VideoEditSession {
   /// Sum of every clip's trimmed duration — the length of the composed timeline.
   var durationMs: Int64 { clips.reduce(0) { $0 + $1.trimmedDurationMs() } }
 
+  var currentPositionMs: Int64 { Self.milliseconds(for: player.currentTime()) }
+
+  static func milliseconds(for time: CMTime) -> Int64 {
+    guard time.isNumeric else { return 0 }
+    let converted = CMTimeConvertScale(time, timescale: 1000, method: .roundTowardZero)
+    guard converted.isNumeric else { return 0 }
+    return max(0, converted.value)
+  }
+
   func update(_ transform: (inout VideoTransformState) -> Void) {
     transform(&state)
   }
@@ -65,7 +75,7 @@ final class VideoEditSession {
   /// Applies `transform` to the clip list and rebuilds the preview composition to match,
   /// preserving the playhead's position on the composed timeline as closely as possible.
   func updateClips(_ transform: ([VideoClip]) -> [VideoClip]) {
-    let previousPositionMs = Int64(CMTimeGetSeconds(player.currentTime()) * 1000)
+    let previousPositionMs = currentPositionMs
     clips = transform(clips)
     rebuildPlayerComposition()
     player.seek(to: CMTime(value: previousPositionMs.clamped(to: 0...max(0, durationMs)), timescale: 1000))
@@ -108,8 +118,13 @@ final class VideoEditSession {
   }
 
   func release() {
+    isReleased = true
+    onClipsReady = nil
     statusObservation?.invalidate()
+    statusObservation = nil
     player.pause()
+    player.replaceCurrentItem(with: nil)
+    cachedAsset = nil
   }
 }
 

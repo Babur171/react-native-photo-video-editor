@@ -11,6 +11,16 @@ public class PhotoVideoEditorSwift: NSObject {
     resolve: @escaping RCTPromiseResolveBlock,
     reject: @escaping RCTPromiseRejectBlock
   ) {
+    DispatchQueue.main.async { [self] in
+      presentEditor(request, resolve: resolve, reject: reject)
+    }
+  }
+
+  private func presentEditor(
+    _ request: String,
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
     guard let data = request.data(using: .utf8),
           let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let source = payload["source"] as? [String: Any] else {
@@ -36,10 +46,11 @@ public class PhotoVideoEditorSwift: NSObject {
       doneButtonText: doneButtonText
     )
     controller.completion = { [weak self, weak controller] outcome in
-      guard let self else { return }
-      self.editorOpen = false
       DispatchQueue.main.async {
-        controller?.dismiss(animated: true) {
+        guard let self, let controller, controller.completion != nil else { return }
+        controller.completion = nil
+        controller.dismiss(animated: true) {
+          self.editorOpen = false
           switch outcome {
           case .cancelled:
             var result: [String: Any] = ["uri": uri, "type": type, "cancelled": true]
@@ -60,7 +71,7 @@ public class PhotoVideoEditorSwift: NSObject {
         }
       }
     }
-    DispatchQueue.main.async { presenter.present(controller, animated: true) }
+    presenter.present(controller, animated: true)
   }
 
   @objc public func cancelExport(_ jobId: String?, resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) { resolve(false) }
