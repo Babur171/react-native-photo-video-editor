@@ -112,6 +112,19 @@ class PhotoEditSession(private val context: Context, sourceUri: String, maxPrevi
       ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
       ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
       ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+      // Mirrored-and-rotated: what a front-facing camera writes for a portrait
+      // shot (CameraX marks the capture as reversed-horizontal, which combines
+      // with the 90/270 sensor rotation into TRANSPOSE/TRANSVERSE rather than
+      // a plain ROTATE_90/270). Falling through to `else` here left those
+      // photos unrotated in the editor.
+      ExifInterface.ORIENTATION_TRANSPOSE -> {
+        matrix.postRotate(90f)
+        matrix.postScale(-1f, 1f)
+      }
+      ExifInterface.ORIENTATION_TRANSVERSE -> {
+        matrix.postRotate(270f)
+        matrix.postScale(-1f, 1f)
+      }
       else -> return decoded
     }
     return Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)

@@ -52,6 +52,8 @@ final class OnlineStickerSheetViewController: UIViewController {
     view.backgroundColor = DesignTokens.elevatedPanel
     buildUI()
     loadLocalStickers()
+    rebuildCategoryChips()
+    applyFilter()
   }
 
   override func viewDidDisappear(_ animated: Bool) {
@@ -187,9 +189,6 @@ final class OnlineStickerSheetViewController: UIViewController {
       ?? hostBundle.url(forResource: "PhotoVideoEditorStickers", withExtension: "bundle")
     guard let bundleURL, let bundle = Bundle(url: bundleURL) else { return }
     localStickerNames = (bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []).map(\.lastPathComponent).sorted()
-    displayedLocalStickerNames = localStickerNames
-    rebuildCategoryChips()
-    applyFilter()
   }
 
   private func localStickerURL(named name: String) -> URL? {
@@ -294,12 +293,14 @@ extension OnlineStickerSheetViewController: UICollectionViewDataSource, UICollec
     let cell = collectionView.dequeueReusableCell(withReuseIdentifier: Self.cellReuseID, for: indexPath) as! BundledStickerCell
     if indexPath.item < displayedRuntimeStickers.count {
       let sticker = displayedRuntimeStickers[indexPath.item]
+      cell.representedStickerURI = sticker.uri
       cell.configure(image: nil)
-      loadRuntimeSticker(sticker) { [weak collectionView] _, image in
-        guard collectionView?.indexPath(for: cell) == indexPath else { return }
+      loadRuntimeSticker(sticker) { [weak cell] _, image in
+        guard let cell, cell.representedStickerURI == sticker.uri else { return }
         cell.configure(image: image)
       }
     } else {
+      cell.representedStickerURI = nil
       let name = displayedLocalStickerNames[indexPath.item - displayedRuntimeStickers.count]
       let image = localStickerURL(named: name).flatMap { UIImage(contentsOfFile: $0.path) }
       cell.configure(image: image)
@@ -330,6 +331,7 @@ extension OnlineStickerSheetViewController: UICollectionViewDataSource, UICollec
 
 /// One grid cell for a bundled sticker image.
 private final class BundledStickerCell: UICollectionViewCell {
+  var representedStickerURI: String?
   private let imageView = UIImageView()
 
   override init(frame: CGRect) {
@@ -356,6 +358,7 @@ private final class BundledStickerCell: UICollectionViewCell {
 
   override func prepareForReuse() {
     super.prepareForReuse()
+    representedStickerURI = nil
     imageView.image = nil
   }
 }
